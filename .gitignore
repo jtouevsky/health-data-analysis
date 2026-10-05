@@ -1,0 +1,48 @@
+# --- Privacy: never commit health data or anything derived from it ---
+data/
+*.zip
+*.xml
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.csv
+
+# --- Secrets and credentials ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+secrets.json
+credentials.json
+token.json
+.streamlit/secrets.toml
+
+# --- Logs, notebooks, coverage ---
+*.log
+logs/
+*.ipynb
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+
+# --- Python / tooling / editors ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+.DS_Store
+.vscode/
+.idea/
