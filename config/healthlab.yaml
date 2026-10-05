@@ -1,0 +1,149 @@
+# HealthLab configuration: the single place for paths, aggregation rules,
+# thresholds and analysis parameters. Every non-obvious value here is
+# justified in DECISIONS.md.
+
+paths:
+  db: data/healthlab.db                 # real database (gitignored)
+  raw_export: data/raw/export.zip
+  demo_db: data/demo/healthlab.db       # used when DEMO_MODE=1 or demo_mode: true
+  demo_export: data/demo/export.zip
+
+demo_mode: false        # overridden by the DEMO_MODE environment variable
+
+time:
+  # Apple re-renders every timestamp in the phone's *current* offset at export
+  # time, so the per-record offset is not the offset in force when the sample was
+  # taken. Local dates are therefore computed by converting the UTC instant into
+  # this IANA zone (DST-aware). Set local_date_mode: offset to use the
+  # per-record offset instead (correct only for exports that preserve it).
+  timezone: America/Los_Angeles
+  local_date_mode: zone            # zone | offset
+
+ingest:
+  batch_size: 10000
+  skip_types:                      # types stored as records but never rolled up
+    - HKDataTypeSleepDurationGoal
+
+# ---------------------------------------------------------------------------
+# Daily rollup rules. One entry per HealthKit type.
+#   name:  column name in the `daily` table
+#   agg:   sum | mean | last | max | min | leq | count | sleep
+#   unit:  canonical unit; raw values are converted to it (see units.py)
+#   kind:  activity | gait | audio | energy | nutrition | body | sleep | other
+#   plausible: [lo, hi] daily-value range used for outlier flags
+# Types not listed are still ingested and rolled up with default_rules below.
+# ---------------------------------------------------------------------------
+metrics:
+  HKQuantityTypeIdentifierStepCount:            {name: steps, agg: sum, unit: count, kind: activity, label: Steps, plausible: [0, 60000]}
+  HKQuantityTypeIdentifierDistanceWalkingRunning: {name: distance_km, agg: sum, unit: km, kind: activity, label: Walking + running distance, plausible: [0, 60]}
+  HKQuantityTypeIdentifierFlightsClimbed:       {name: flights, agg: sum, unit: count, kind: activity, label: Flights climbed, plausible: [0, 200]}
+  HKQuantityTypeIdentifierActiveEnergyBurned:   {name: active_kcal, agg: sum, unit: kcal, kind: energy, label: Active energy (Apple est.), plausible: [0, 3000]}
+  HKQuantityTypeIdentifierBasalEnergyBurned:    {name: basal_kcal, agg: sum, unit: kcal, kind: energy, label: Basal energy (Apple est.), plausible: [800, 3000]}
+  HKQuantityTypeIdentifierWalkingSpeed:         {name: walking_speed_kmh, agg: mean, unit: km/hr, kind: gait, label: Walking speed, plausible: [1, 8]}
+  HKQuantityTypeIdentifierWalkingStepLength:    {name: step_length_cm, agg: mean, unit: cm, kind: gait, label: Step length, plausible: [30, 120]}
+  HKQuantityTypeIdentifierWalkingDoubleSupportPercentage: {name: double_support_pct, agg: mean, unit: "%", kind: gait, label: Double support time, plausible: [10, 50]}
+  HKQuantityTypeIdentifierWalkingAsymmetryPercentage:     {name: asymmetry_pct, agg: mean, unit: "%", kind: gait, label: Walking asymmetry, plausible: [0, 100]}
+  HKQuantityTypeIdentifierAppleWalkingSteadiness: {name: walking_steadiness_pct, agg: mean, unit: "%", kind: gait, label: Walking steadiness, plausible: [0, 100]}
+  HKQuantityTypeIdentifierHeadphoneAudioExposure: {name: headphone_db, agg: leq, unit: dBASPL, kind: audio, label: Headphone level (LAeq), plausible: [30, 110]}
+  HKCategoryTypeIdentifierHeadphoneAudioExposureEvent: {name: headphone_alerts, agg: count, unit: count, kind: audio, label: Headphone loudness alerts}
+  HKQuantityTypeIdentifierDietaryEnergyConsumed: {name: intake_kcal, agg: sum, unit: kcal, kind: nutrition, label: Energy intake (logged), plausible: [0, 6000]}
+  HKQuantityTypeIdentifierDietaryProtein:       {name: protein_g, agg: sum, unit: g, kind: nutrition, label: Protein}
+  HKQuantityTypeIdentifierDietaryCarbohydrates: {name: carbs_g, agg: sum, unit: g, kind: nutrition, label: Carbohydrates}
+  HKQuantityTypeIdentifierDietaryFatTotal:      {name: fat_g, agg: sum, unit: g, kind: nutrition, label: Fat}
+  HKQuantityTypeIdentifierDietaryFiber:         {name: fiber_g, agg: sum, unit: g, kind: nutrition, label: Fiber}
+  HKQuantityTypeIdentifierDietarySugar:         {name: sugar_g, agg: sum, unit: g, kind: nutrition, label: Sugar}
+  HKQuantityTypeIdentifierDietarySodium:        {name: sodium_mg, agg: sum, unit: mg, kind: nutrition, label: Sodium}
+  HKQuantityTypeIdentifierBodyMass:             {name: weight_kg, agg: mean, unit: kg, kind: body, label: Body weight, plausible: [30, 250]}
+  HKQuantityTypeIdentifierBodyFatPercentage:    {name: body_fat_pct, agg: mean, unit: "%", kind: body, label: Body fat}
+  HKQuantityTypeIdentifierBodyMassIndex:        {name: bmi, agg: mean, unit: count, kind: body, label: BMI}
+  HKCategoryTypeIdentifierSleepAnalysis:        {name: sleep, agg: sleep, unit: hr, kind: sleep, label: Sleep}
+
+default_rules:
+  # Applied to any type not listed above, keyed on the canonical unit.
+  cumulative_units: [count, kcal, kJ, km, m, cm, g, mg, mcg, mL, L, min, s, hr]
+  cumulative_agg: sum
+  sample_agg: mean
+  category_agg: count
+  dietary_prefix: HKQuantityTypeIdentifierDietary   # -> kind: nutrition, agg: sum
+
+# Source deduplication: for each (type, local day) only the highest-priority
+# source that has data that day is used. Sources not listed rank below listed
+# ones, ordered by their total record count for that type (most first).
+source_priority:
+  default: []           # e.g. ["Someone's iPhone"]
+  # HKQuantityTypeIdentifierActiveEnergyBurned: ["iPhone", "MyFitnessPal"]
+
+nutrition:
+  energy_metric: intake_kcal
+  min_entries: 3          # food log entries (energy records) in the day
+  min_kcal: 1200          # below this the day is almost certainly partially logged
+  max_kcal: 5000          # above this the day is almost certainly a logging error
+
+quality:
+  gap_min_days: 3         # report runs of >= this many missing days
+  outlier_window_days: 28
+  outlier_mad_k: 5.0
+
+analysis:
+  start_date: null        # e.g. "2022-01-01"; null = use all data
+  min_coverage_days: 30   # metrics with fewer observed days are hidden from analyses
+
+trends:
+  weight_ewma_halflife_days: 10
+
+correlations:
+  min_n: 60
+  max_lag: 3
+  default_transform: diff     # diff | detrend | raw
+  detrend_window_days: 28
+  fdr_alpha: 0.05
+  effective_n: true           # adjust p for residual lag-1 autocorrelation
+  definitional_pairs:         # mechanically linked; flagged and ranked last
+    - [steps, distance_km]
+    - [steps, active_kcal]
+    - [distance_km, active_kcal]
+    - [steps, flights]
+    - [walking_speed_kmh, step_length_cm]
+    - [intake_kcal, protein_g]
+    - [intake_kcal, carbs_g]
+    - [intake_kcal, fat_g]
+    - [intake_kcal, sugar_g]
+    - [carbs_g, sugar_g]
+    - [carbs_g, fiber_g]
+    - [active_kcal, basal_kcal]
+
+seasonal:
+  bootstrap_reps: 2000
+  block_days: 7
+  seed: 42
+  # label -> list of [start, end] inclusive date ranges. Fill in your own.
+  periods:
+    bulgaria_summer: []        # e.g. [["2024-06-20", "2024-08-25"], ["2025-06-18", "2025-08-28"]]
+    school_year: []            # e.g. [["2023-09-01", "2024-06-10"], ["2024-09-03", "2025-06-12"]]
+
+energy:
+  kcal_per_kg: 7700
+  window_days: 28
+  min_logged_days: 14         # well-logged days required inside a window
+  min_weigh_ins: 4            # weigh-ins required inside a window
+  bootstrap_reps: 300
+  logging_error_sd: 0.10      # per-day relative error of logged intake (trajectory sim)
+  apple_bias_sd: 0.08         # run-level relative uncertainty of Apple's expenditure
+  seed: 7
+
+forecast:
+  horizon_days: 7
+  n_splits: 8
+  max_train_days: 730
+  sarimax_order: [1, 0, 1]
+  sarimax_seasonal_order: [1, 0, 1, 7]
+  tree_lags: [7, 8, 14, 21, 28]
+  seed: 0
+
+demo:
+  start_date: "2025-04-01"
+  days: 548
+  seed: 2024
+  periods:
+    bulgaria_summer: [["2025-06-20", "2025-08-25"], ["2026-06-20", "2026-08-25"]]
+    school_year: [["2025-04-01", "2025-06-12"], ["2025-09-03", "2026-06-12"]]
