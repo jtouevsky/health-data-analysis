@@ -100,3 +100,16 @@ choices worth revisiting once more data exists.
 | C9 | **Mechanical pairs are flagged and ranked last**: definitional (steps↔distance, macros↔calories), biomechanical (double support↔speed/step length), and the **basal-energy artifact** (basal↔steps/distance/gait). | On iPhone-only data, basal energy correlates strongly with steps day to day. The iPhone basal estimate only accrues while the phone records, so its daily total partly measures phone-carry time rather than metabolism. ⚠️ This is also why Apple's basal estimate should be used cautiously in the energy-balance module. |
 | C10 | The table leads with effect size (ρ) and caveats that \|ρ\| < 0.1 can be "significant" yet negligible with thousands of days. | Statistical significance isn't practical significance. |
 | C11 | Persistence caveat: lagged associations between metrics that already correlate on the same day may reflect multi-day states, not lead–lag. The drill-down shows the same-day ρ next to the lagged ρ. | A full Granger-style partial test was judged out of scope. The UI makes the comparison easy instead. |
+
+## Seasonal comparison
+
+| # | Decision | Rationale |
+|---|---|---|
+| S1 | Periods are config labels → lists of inclusive date ranges. Overlapping differently labelled ranges are an error. | Supports "every summer in Bulgaria" as one label, and ambiguous days would contaminate both groups. |
+| S2 | When fewer than two periods are configured, the page falls back to **calendar months** (default Jun–Aug vs the rest). | The shipped config has no travel ranges, because they're personal. ⚠️ Fill in `seasonal.periods` for the intended comparison. |
+| S3 | **Mann–Whitney U** (two-sided) for the location/dominance test. | Distribution-free and robust to the skew and outliers in daily metrics. It tests stochastic dominance, which matches the effect size reported. |
+| S4 | **Cliff's δ** as the effect size, computed as 2U/(n₁n₂) − 1 (identical to the rank-biserial r). Magnitude labels follow Romano et al. (2006): 0.147 / 0.33 / 0.474. | It's the effect size that pairs naturally with MWU, it's ordinal and interpretable as P(A>B) − P(A<B), and it isn't driven by outliers. |
+| S5 | **Bootstrap 95% CI for the difference in medians** with 2,000 reps, percentile method, fixed seed. Both an **iid** and a **7-day moving-block** CI are shown. | The median difference is in interpretable units (e.g. +2,100 steps). The iid bootstrap assumes independent days. Blocks of one week keep weekly seasonality and short-range autocorrelation inside resamples, so that CI is the honest one. The percentile method was chosen over BCa for simplicity given ≥ 60 days per group. |
+| S6 | A toggle compares **weekly means** (weeks with ≥ 4 observed days) instead of days. | Weeks are much closer to independent, so MWU on weeks is a conservative sensitivity check on the daily p. |
+| S7 | BH-FDR across the metrics compared in one A-vs-B comparison. | Same reasoning as C5, with the family being one comparison's metrics. |
+| S8 | A confounds panel is always shown: environment, schedule, the LA-timezone artifact, carry habits, weather, device changes, and few periods. | With n = 1 person and a handful of summers, period differences are descriptive, not attributable. |
