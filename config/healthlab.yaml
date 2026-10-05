@@ -99,11 +99,13 @@ trends:
 correlations:
   min_n: 60
   max_lag: 3
-  default_transform: diff     # diff | detrend | raw
+  default_transform: detrend  # detrend | diff | raw  (see DECISIONS.md C2)
   detrend_window_days: 28
   fdr_alpha: 0.05
   effective_n: true           # adjust p for residual lag-1 autocorrelation
-  definitional_pairs:         # mechanically linked; flagged and ranked last
+  # Mechanically linked pairs (by definition, biomechanics or measurement artifact).
+  # Flagged and ranked after everything else so they don't crowd out real hypotheses.
+  definitional_pairs:
     - [steps, distance_km]
     - [steps, active_kcal]
     - [distance_km, active_kcal]
@@ -116,6 +118,16 @@ correlations:
     - [carbs_g, sugar_g]
     - [carbs_g, fiber_g]
     - [active_kcal, basal_kcal]
+    - [active_kcal, flights]               # climbing is part of active energy
+    - [double_support_pct, walking_speed_kmh]   # gait biomechanics
+    - [double_support_pct, step_length_cm]
+    # Artifact: the iPhone basal estimate only accrues while the phone is recording,
+    # so its daily total scales with how much the phone was carried.
+    - [basal_kcal, steps]
+    - [basal_kcal, distance_km]
+    - [basal_kcal, flights]
+    - [basal_kcal, walking_speed_kmh]
+    - [basal_kcal, step_length_cm]
 
 seasonal:
   bootstrap_reps: 2000

@@ -34,5 +34,6 @@ healthlab = ["app/*.py", "app/views/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-q"
 markers = ["slow: end-to-end tests that generate and analyse a synthetic export"]
