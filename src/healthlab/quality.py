@@ -124,11 +124,13 @@ def logging_summary(daily: pd.DataFrame, cfg: Config) -> pd.DataFrame | None:
             .value_counts().unstack(fill_value=0))
 
 
-def activity_timing(con: sqlite3.Connection, cfg: Config, hk_type: str = "HKQuantityTypeIdentifierStepCount") -> pd.DataFrame:
+def activity_timing(con: sqlite3.Connection, cfg: Config, hk_type: str = "HKQuantityTypeIdentifierStepCount",
+                    min_total: float = 30000.0) -> pd.DataFrame:
     """Share of each month's steps that fall in each local hour (month x hour).
 
     A sudden shift of the daily activity rhythm is the signature of travel
-    across time zones (e.g. summers in Bulgaria show up ~10 h earlier).
+    across time zones (e.g. summers in Bulgaria show up ~10 h earlier). Months
+    with fewer than ``min_total`` steps are dropped as too sparse to profile.
     """
     df = pd.read_sql_query("SELECT start_ts, value FROM records WHERE type = ?", con, params=(hk_type,))
     if df.empty:
@@ -136,4 +138,5 @@ def activity_timing(con: sqlite3.Connection, cfg: Config, hk_type: str = "HKQuan
     t = pd.to_datetime(df["start_ts"], utc=True).dt.tz_convert(cfg.timezone)
     g = df.assign(month=t.dt.tz_localize(None).dt.to_period("M").dt.to_timestamp(), hour=t.dt.hour)
     m = g.pivot_table(index="month", columns="hour", values="value", aggfunc="sum", fill_value=0.0)
+    m = m[m.sum(axis=1) >= min_total]
     return m.div(m.sum(axis=1), axis=0)

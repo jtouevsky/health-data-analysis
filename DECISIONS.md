@@ -72,3 +72,15 @@ choices worth revisiting once more data exists.
 | Q3 | Plausibility ranges per metric in config (e.g. steps 0–60,000, basal 800–3,000 kcal). | They catch unit errors and duplicated imports, and are deliberately wide. |
 | Q4 | Gaps are reported only between a metric's first and last observation, for runs ≥ 3 days. | Before the first sample the metric didn't exist. Gaps of 1–2 days are routine. |
 | Q5 | Activity timing (share of steps per local hour by month) is shown on the Data Quality page. | It makes the LA-only timezone limitation (T1) visible: travel shows up as a shifted daily rhythm. |
+
+## Trends & presentation
+
+| # | Decision | Rationale |
+|---|---|---|
+| P1 | Weight trend = **time-aware EWMA, 10-day half-life** (α ≈ 0.067 per day), with daily values interpolated between weigh-ins. | Scale noise is ±0.5–1 kg/day (water, glycogen, gut content). A 10-day half-life damps it ~10× while tracking a real 0.5 kg/week change within ~2 weeks. It's time-aware (`times=`) so irregular weigh-in gaps decay correctly. It's the same idea as Hacker's Diet (α=0.1/day ≈ 6.6-day half-life). I chose slightly smoother because weigh-ins are sparser than daily. |
+| P2 | Rolling means are trailing and need ≥ 50% of the window observed. Smoothing runs on the full history before the date filter. | No look-ahead, gaps don't bias the mean toward zero, and the left edge of the view isn't artificially cold. |
+| P3 | The weekly/monthly view shows the mean ± interquartile range, hiding periods with < 3 (weekly) or < 10 (monthly) observed days. | Sparse periods would otherwise read as real swings. |
+| P4 | The day-of-week Kruskal–Wallis p is shown with an "optimistic" caveat. | Daily values are autocorrelated, so the effective n is below the day count. |
+| P5 | Charts use a validated colour-blind-safe categorical order and never a dual y-axis. Two series of different units go in stacked shared-x panels. | Dual axes invite spurious visual correlation, which this app is specifically trying to avoid. |
+| P6 | Quality pages see *all* days (unmasked). Analysis pages see masked nutrition and `analysis.start_date`. | Quality diagnostics have to show partial logging. Analyses must not use it. |
+| P7 | Streamlit binds to 127.0.0.1 with usage statistics off (`.streamlit/config.toml` and the CLI). | The privacy requirement is no network traffic involving health data. |

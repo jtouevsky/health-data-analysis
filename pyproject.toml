@@ -30,7 +30,7 @@ healthlab = "healthlab.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-healthlab = ["app/*.py", "app/pages/*.py"]
+healthlab = ["app/*.py", "app/views/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
