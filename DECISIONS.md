@@ -37,3 +37,38 @@ choices worth revisiting once more data exists.
 | T1 | **Local dates use `America/Los_Angeles` (DST-aware) applied to the UTC instant**, for all records, including summers in Bulgaria. | Owner's decision: the export doesn't preserve original offsets (D3). ⚠️ Known error: during Bulgaria stays, the LA date boundary falls at about 10:00 Sofia time, so mornings are attributed to the previous day. Daily *totals* over a stay are unaffected, but day-to-day alignment (and lagged correlations) are noisier in those weeks. |
 | T2 | `local_date_mode: offset` remains available. | Correct for exports that preserve offsets, and lets tests cover both behaviours. |
 | T3 | A record's day is the local date of its **start** time. `local_end_date` is also stored. | That's the convention Apple's own daily charts use. Sleep uses the end date instead (R5). |
+
+## Daily rollup
+
+| # | Decision | Rationale |
+|---|---|---|
+| R1 | Aggregation per type comes from `metrics:` in config. Cumulative types (steps, distance, flights, energy, nutrients) use **sum**. Gait samples use **mean**. Weight uses **mean** of the day's readings. | Totals are the natural daily quantity for cumulative types. For weight, the mean of same-day weigh-ins reduces measurement noise, and the EWMA handles day-to-day water noise anyway. |
+| R2 | Headphone exposure uses **LAeq** (duration-weighted energy average: 10·log10 of the mean of 10^(L/10)) instead of the arithmetic mean of dB. | Decibels are logarithmic. The arithmetic mean understates exposure, and LAeq is the standard occupational/WHO metric. |
+| R3 | **Source dedup**: for each (type, local day), only the highest-ranked source with data that day is used. Ranking = configured `source_priority` list, then sources by total record count (ties alphabetical). | Summing iPhone + app (or old + new phone) double-counts. Day-level selection keeps each day internally consistent. Falling back to a lower-ranked source fills days when the main source is absent (e.g. the old iPhone era). |
+| R4 | Cumulative samples that cross local midnight are **prorated by time overlap** across the days. | Some step samples span up to ~10 h, and assigning them wholly to the start day biases both days. |
+| R5 | Sleep intervals go to the **local date of waking** (interval end). Overlapping intervals of the same class are merged before summing. Naps also count toward their end date. | Owner's spec. Merging avoids double-counting overlapping core/deep segments or two sources. Not analysed yet (D2). |
+| R6 | Raw units are converted to canonical metric units: mi→km, Cal→kcal, mi/hr→km/h, in→cm, lb→kg, and the HealthKit `%` fraction → 0–100. | Analyses need consistent units, and display conversion (kg/lb, km/mi) happens only in the UI. |
+| R7 | Unlisted types get a default rule. A canonical unit in `default_rules.cumulative_units` means sum, otherwise mean. Category types are counted. Unlisted `Dietary*` types are treated as nutrition sums. | Generic ingest without silently dropping new types. The `metric_catalog.configured` flag shows which ones were defaulted. |
+| R8 | A day with **no records is NaN (missing), never 0**. | Absence of data isn't evidence of zero activity or zero intake. |
+| R9 | Exception: `zero_fill` metrics (flights climbed, headphone alerts) are 0 on days when **steps** were recorded, and NaN otherwise. | Apple only writes a flights sample when you climb. If the phone was demonstrably carried, "no flights" really is 0, and leaving those days NaN would bias the mean upward. Not applied to nutrition. |
+| R10 | The daily table is a continuous calendar from the first to the last observed day. | Gaps become explicit NaN rows for coverage and differencing. |
+| R11 | `daily`, `metric_catalog` and `daily_sources` are dropped and rebuilt on every rollup. | Derived data is always reproducible from raw, with no migration logic. |
+
+## Nutrition logging coverage (optional module)
+
+| # | Decision | Rationale |
+|---|---|---|
+| N1 | `n_food_entries` = number of dietary-energy records from the selected source that day. | Food apps write one energy record per logged item/meal, so the count is a proxy for logging effort. |
+| N2 | `well_logged` = **≥ 3 entries AND 1200 ≤ kcal ≤ 5000**. | Fewer than 3 entries usually means a skipped meal. Under 1200 kcal for an adult is far more often partial logging than a real intake. Over 5000 kcal is usually a duplicate or entry error. All three thresholds are configurable. |
+| N3 | **Every nutrition analysis sees only well-logged days**: `load_daily()` masks nutrition columns to NaN on other days by default. | Including partial days would bias intake down and make empirical TDEE look low. Enforced at one choke point. |
+| N4 | ⚠️ Well-logged days may still be under-reported (forgotten snacks, portion underestimates). | The coverage flag catches *missing* logging, not *inaccurate* logging. See the energy-balance section. |
+
+## Data quality
+
+| # | Decision | Rationale |
+|---|---|---|
+| Q1 | Outliers: \|value − centred 28-day rolling median\| > 5 × scaled MAD. The local MAD is floored at 0.5 × the series-wide MAD. | Robust to the outliers being hunted and adapts to slow trends. k=5 flags only gross anomalies (partial days, sensor glitches). The floor prevents flag storms on near-constant stretches. |
+| Q2 | Robust outlier flags are skipped for count / `zero_fill` metrics, which only get plausibility checks. | Zero-inflated series have a degenerate MAD. |
+| Q3 | Plausibility ranges per metric in config (e.g. steps 0–60,000, basal 800–3,000 kcal). | They catch unit errors and duplicated imports, and are deliberately wide. |
+| Q4 | Gaps are reported only between a metric's first and last observation, for runs ≥ 3 days. | Before the first sample the metric didn't exist. Gaps of 1–2 days are routine. |
+| Q5 | Activity timing (share of steps per local hour by month) is shown on the Data Quality page. | It makes the LA-only timezone limitation (T1) visible: travel shows up as a shifted daily rhythm. |

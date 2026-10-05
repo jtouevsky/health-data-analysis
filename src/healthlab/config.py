@@ -44,6 +44,7 @@ class MetricRule:
     label: str
     plausible: tuple[float, float] | None = None
     configured: bool = True  # False when derived from default_rules
+    zero_fill: bool = False  # missing day -> 0 when the anchor metric has data
 
 
 @dataclass
@@ -123,6 +124,7 @@ def _parse_metrics(raw: dict[str, Any]) -> dict[str, MetricRule]:
             kind=m.get("kind", "other"),
             label=m.get("label", m["name"]),
             plausible=(float(pl[0]), float(pl[1])) if pl else None,
+            zero_fill=bool(m.get("zero_fill", False)),
         )
     return out
 

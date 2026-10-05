@@ -31,12 +31,14 @@ ingest:
 #   unit:  canonical unit; raw values are converted to it (see units.py)
 #   kind:  activity | gait | audio | energy | nutrition | body | sleep | other
 #   plausible: [lo, hi] daily-value range used for outlier flags
+#   zero_fill: true -> a day with no samples is 0 (not missing) when the phone was
+#              demonstrably in use that day (rollup.zero_fill_anchor has data)
 # Types not listed are still ingested and rolled up with default_rules below.
 # ---------------------------------------------------------------------------
 metrics:
   HKQuantityTypeIdentifierStepCount:            {name: steps, agg: sum, unit: count, kind: activity, label: Steps, plausible: [0, 60000]}
   HKQuantityTypeIdentifierDistanceWalkingRunning: {name: distance_km, agg: sum, unit: km, kind: activity, label: Walking + running distance, plausible: [0, 60]}
-  HKQuantityTypeIdentifierFlightsClimbed:       {name: flights, agg: sum, unit: count, kind: activity, label: Flights climbed, plausible: [0, 200]}
+  HKQuantityTypeIdentifierFlightsClimbed:       {name: flights, agg: sum, unit: count, kind: activity, label: Flights climbed, plausible: [0, 200], zero_fill: true}
   HKQuantityTypeIdentifierActiveEnergyBurned:   {name: active_kcal, agg: sum, unit: kcal, kind: energy, label: Active energy (Apple est.), plausible: [0, 3000]}
   HKQuantityTypeIdentifierBasalEnergyBurned:    {name: basal_kcal, agg: sum, unit: kcal, kind: energy, label: Basal energy (Apple est.), plausible: [800, 3000]}
   HKQuantityTypeIdentifierWalkingSpeed:         {name: walking_speed_kmh, agg: mean, unit: km/hr, kind: gait, label: Walking speed, plausible: [1, 8]}
@@ -45,7 +47,7 @@ metrics:
   HKQuantityTypeIdentifierWalkingAsymmetryPercentage:     {name: asymmetry_pct, agg: mean, unit: "%", kind: gait, label: Walking asymmetry, plausible: [0, 100]}
   HKQuantityTypeIdentifierAppleWalkingSteadiness: {name: walking_steadiness_pct, agg: mean, unit: "%", kind: gait, label: Walking steadiness, plausible: [0, 100]}
   HKQuantityTypeIdentifierHeadphoneAudioExposure: {name: headphone_db, agg: leq, unit: dBASPL, kind: audio, label: Headphone level (LAeq), plausible: [30, 110]}
-  HKCategoryTypeIdentifierHeadphoneAudioExposureEvent: {name: headphone_alerts, agg: count, unit: count, kind: audio, label: Headphone loudness alerts}
+  HKCategoryTypeIdentifierHeadphoneAudioExposureEvent: {name: headphone_alerts, agg: count, unit: count, kind: audio, label: Headphone loudness alerts, zero_fill: true}
   HKQuantityTypeIdentifierDietaryEnergyConsumed: {name: intake_kcal, agg: sum, unit: kcal, kind: nutrition, label: Energy intake (logged), plausible: [0, 6000]}
   HKQuantityTypeIdentifierDietaryProtein:       {name: protein_g, agg: sum, unit: g, kind: nutrition, label: Protein}
   HKQuantityTypeIdentifierDietaryCarbohydrates: {name: carbs_g, agg: sum, unit: g, kind: nutrition, label: Carbohydrates}
@@ -69,6 +71,9 @@ default_rules:
 # Source deduplication: for each (type, local day) only the highest-priority
 # source that has data that day is used. Sources not listed rank below listed
 # ones, ordered by their total record count for that type (most first).
+rollup:
+  zero_fill_anchor: steps   # 'phone was carried' signal for zero_fill metrics
+
 source_priority:
   default: []           # e.g. ["Someone's iPhone"]
   # HKQuantityTypeIdentifierActiveEnergyBurned: ["iPhone", "MyFitnessPal"]
