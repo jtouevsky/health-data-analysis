@@ -1,4 +1,4 @@
-"""Data-quality diagnostics: coverage, gaps, sources, outliers, logging coverage."""
+"""Data-quality diagnostics: coverage, gaps, sources and devices, outliers, activity timing."""
 
 from __future__ import annotations
 
@@ -113,16 +113,6 @@ def source_breakdown(con: sqlite3.Connection) -> pd.DataFrame:
     return raw.sort_values(["type", "n_records"], ascending=[True, False])
 
 
-def logging_summary(daily: pd.DataFrame, cfg: Config) -> pd.DataFrame | None:
-    """Monthly counts of well-logged, partially logged and unlogged days (None if no nutrition)."""
-    energy = cfg.section("nutrition").get("energy_metric", "intake_kcal")
-    if "well_logged" not in daily or energy not in daily:
-        return None
-    status = np.where(daily["well_logged"], "well logged",
-                      np.where(daily["n_food_entries"] > 0, "partial / implausible", "not logged"))
-    return (pd.Series(status, index=daily.index).groupby(pd.Grouper(freq="MS"))
-            .value_counts().unstack(fill_value=0))
-
 
 def activity_timing(con: sqlite3.Connection, cfg: Config, hk_type: str = "HKQuantityTypeIdentifierStepCount",
                     min_total: float = 30000.0) -> pd.DataFrame:
@@ -195,6 +185,23 @@ def source_monthly(con: sqlite3.Connection) -> pd.DataFrame:
         "SELECT source_name, substr(local_date, 1, 7) AS month, COUNT(*) AS n FROM records GROUP BY 1, 2", con)
     df["month"] = pd.to_datetime(df["month"] + "-01")
     return df
+
+
+def software_timeline(con: sqlite3.Connection) -> pd.DataFrame:
+    """First date each *major* OS version was reported per source (e.g. iOS 15 -> 16).
+
+    OS updates can change Apple's motion/gait algorithms, so they are candidate
+    explanations for shifts in walking metrics, just like new hardware.
+    """
+    df = pd.read_sql_query(
+        f"""SELECT source_name, {_device_field('software')} AS software, MIN(local_date) AS first_date
+            FROM records WHERE device IS NOT NULL GROUP BY 1, 2""", con).dropna(subset=["software"])
+    if df.empty:
+        return pd.DataFrame(columns=["source_name", "major", "first_date"])
+    df["major"] = pd.to_numeric(df["software"].str.split(".").str[0], errors="coerce")
+    df = df.dropna(subset=["major"]).astype({"major": int})
+    return (df.groupby(["source_name", "major"], as_index=False)["first_date"].min()
+            .sort_values(["source_name", "major"]).reset_index(drop=True))
 
 
 def hardware_timeline(con: sqlite3.Connection) -> pd.DataFrame:

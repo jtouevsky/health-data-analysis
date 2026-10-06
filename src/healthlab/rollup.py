@@ -12,8 +12,7 @@ Pipeline per HealthKit type:
 
 A day with no records is NaN (missing), never zero, except for metrics marked
 ``zero_fill`` (e.g. flights climbed), which are 0 on days the phone was evidently
-carried (the ``zero_fill_anchor`` metric has data). Nutrition days additionally
-get a logging-coverage flag (``n_food_entries``, ``well_logged``).
+carried (the ``zero_fill_anchor`` metric has data).
 """
 
 from __future__ import annotations
@@ -277,33 +276,8 @@ def build_daily(records: pd.DataFrame, cfg: Config) -> tuple[pd.DataFrame, pd.Da
             daily.loc[fill, col] = 0.0
 
     sources = pd.concat(src_rows, ignore_index=True) if src_rows else pd.DataFrame()
-    daily = add_nutrition_coverage(daily, sources, cfg)
     return daily, pd.DataFrame(catalog), sources
 
-
-def add_nutrition_coverage(daily: pd.DataFrame, sources: pd.DataFrame, cfg: Config) -> pd.DataFrame:
-    """Add ``n_food_entries`` and ``well_logged`` if an intake metric exists.
-
-    A day is *well logged* when it has at least ``min_entries`` energy entries and
-    a total intake inside [``min_kcal``, ``max_kcal``]. Days with no entries have
-    NaN intake (missing), never zero.
-    """
-    n = cfg.section("nutrition")
-    energy = n.get("energy_metric", "intake_kcal")
-    if energy not in daily.columns:
-        return daily
-    entries = pd.Series(0.0, index=daily.index)
-    if not sources.empty:
-        e = sources[sources["metric"] == energy].set_index("date")["n_samples"]
-        entries = e.reindex(daily.index).fillna(0.0)
-    daily = daily.copy()
-    daily["n_food_entries"] = entries.astype(int)
-    kcal = daily[energy]
-    daily["well_logged"] = (
-        (daily["n_food_entries"] >= int(n.get("min_entries", 3)))
-        & kcal.between(float(n.get("min_kcal", 1200)), float(n.get("max_kcal", 5000)))
-    )
-    return daily
 
 
 def export_cutoff(con: sqlite3.Connection, cfg: Config) -> pd.Timestamp | None:
@@ -337,8 +311,6 @@ def rebuild_daily(cfg: Config, db_path: str | Path | None = None,
         out = daily.copy()
         if not out.empty:
             out.index = out.index.strftime("%Y-%m-%d")
-            if "well_logged" in out:
-                out["well_logged"] = out["well_logged"].astype(int)
         out.to_sql("daily", con, if_exists="replace", index=True, index_label="date")
         catalog.to_sql("metric_catalog", con, if_exists="replace", index=False)
         if not sources.empty:
@@ -355,13 +327,6 @@ def rebuild_daily(cfg: Config, db_path: str | Path | None = None,
 # Reading the derived tables (used by analyses and the app)
 # ---------------------------------------------------------------------------
 
-def nutrition_metrics(catalog: pd.DataFrame) -> list[str]:
-    """Metric columns of kind ``nutrition``."""
-    if catalog.empty:
-        return []
-    return catalog.loc[catalog["kind"] == "nutrition", "metric"].tolist()
-
-
 def load_catalog(con: sqlite3.Connection) -> pd.DataFrame:
     """The ``metric_catalog`` table (empty frame if the rollup has not run)."""
     if not table_exists(con, "metric_catalog"):
@@ -369,13 +334,10 @@ def load_catalog(con: sqlite3.Connection) -> pd.DataFrame:
     return pd.read_sql_query("SELECT * FROM metric_catalog", con)
 
 
-def load_daily(con: sqlite3.Connection, mask_nutrition: bool = True,
-               start_date: str | None = None) -> pd.DataFrame:
+def load_daily(con: sqlite3.Connection, start_date: str | None = None) -> pd.DataFrame:
     """Load the daily table with a DatetimeIndex.
 
     Args:
-        mask_nutrition: set nutrition metrics to NaN on days that are not
-            ``well_logged``, so every downstream analysis uses well-logged days only.
         start_date: drop rows before this date (``analysis.start_date``).
     """
     if not table_exists(con, "daily"):
@@ -384,11 +346,6 @@ def load_daily(con: sqlite3.Connection, mask_nutrition: bool = True,
     if df.empty:
         return df
     df.index = pd.DatetimeIndex(pd.to_datetime(df.index), name="date")
-    if "well_logged" in df:
-        df["well_logged"] = df["well_logged"].fillna(0).astype(bool)
-        if mask_nutrition:
-            cols = [c for c in nutrition_metrics(load_catalog(con)) if c in df]
-            df.loc[~df["well_logged"], cols] = np.nan
     if start_date:
         df = df.loc[pd.Timestamp(start_date):]
     return df

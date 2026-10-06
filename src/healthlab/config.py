@@ -137,8 +137,6 @@ class Config:
             return self.metrics[hk_type]
         d = self.raw["default_rules"]
         name = short_name(hk_type)
-        if hk_type.startswith(d["dietary_prefix"]):
-            return MetricRule(hk_type, name, "sum", unit, "nutrition", name, None, False)
         if is_category:
             return MetricRule(hk_type, name, d["category_agg"], "count", "other", name, None, False)
         agg = d["cumulative_agg"] if unit in set(d["cumulative_units"]) else d["sample_agg"]

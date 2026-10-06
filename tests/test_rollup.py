@@ -53,7 +53,8 @@ def test_unit_conversion(tmp_path, cfg):
     d, _ = build(tmp_path, cfg, body)
     assert d.loc["2024-05-01", "distance_km"] == pytest.approx(1.609344)
     assert d.loc["2024-05-01", "double_support_pct"] == pytest.approx(30.0)
-    assert d.loc["2024-05-01", "weight_kg"] == pytest.approx(70.0, abs=1e-4)
+    # Unconfigured types still roll up generically (mass -> kg, mean).
+    assert d.loc["2024-05-01", "body_mass"] == pytest.approx(70.0, abs=1e-4)
     assert convert(1.0, "Cal", "kcal") == 1.0
 
 

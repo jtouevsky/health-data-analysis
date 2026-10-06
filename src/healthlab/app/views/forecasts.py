@@ -4,8 +4,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from healthlab.analysis.forecast import LABELS, ForecastParams, evaluate, future_forecast
-from healthlab.analysis.trend import weight_trend
-from healthlab.app.common import BOTTOM_LEGEND, SERIES, MUTED, analysable_metrics, cfg, has_metric, label, require_data, style, to_display
+from healthlab.app.common import BOTTOM_LEGEND, SERIES, MUTED, cfg, has_metric, label, require_data, style, to_display
 
 st.title("Forecasts")
 daily, catalog = require_data()
@@ -13,23 +12,16 @@ c = cfg()
 fc = c.section("forecast")
 COLORS = {"naive": MUTED, "seasonal_naive": SERIES[3], "sarimax": SERIES[0], "gbm": SERIES[2]}
 
-targets = {}
-if has_metric(daily, "weight_kg", 30):
-    hl = float(c.section("trends").get("weight_ewma_halflife_days", 10))
-    targets["weight_trend"] = ("Weight trend (EWMA)", weight_trend(daily["weight_kg"], hl), "weight_kg")
-for m in analysable_metrics(daily, catalog):
-    if daily[m].notna().sum() >= 120:
-        targets[m] = (label(m, catalog), daily[m], m)
+targets = {m: (label(m, catalog), daily[m], m) for m in fc.get("targets", ["steps", "walking_speed_kmh"])
+           if has_metric(daily, m, 120)}
 if not targets:
-    st.info("No series has enough history (≥ 120 observed days) to forecast.")
+    st.info("None of the configured forecast targets has enough history (≥ 120 observed days).")
     st.stop()
 
-default = "weight_trend" if "weight_trend" in targets else ("steps" if "steps" in targets else next(iter(targets)))
+default = next(iter(targets))
 c1, c2 = st.columns([3, 1])
 key = c1.selectbox("Series", list(targets), index=list(targets).index(default), format_func=lambda k: targets[k][0])
 n_splits = c2.number_input("Evaluation folds", 4, 30, int(fc["n_splits"]))
-if "weight_trend" not in targets:
-    st.caption("Weight forecasting appears here when body-weight data is present (optional module).")
 
 name, series, unit_metric = targets[key]
 p = ForecastParams.from_config(fc, n_splits=int(n_splits))

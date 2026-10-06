@@ -36,7 +36,7 @@ ingest:
 #   name:  column name in the `daily` table
 #   agg:   sum | mean | last | max | min | leq | count | sleep
 #   unit:  canonical unit; raw values are converted to it (see units.py)
-#   kind:  activity | gait | audio | energy | nutrition | body | sleep | other
+#   kind:  activity | gait | audio | energy | sleep | other
 #   plausible: [lo, hi] daily-value range used for outlier flags
 #   zero_fill: true -> a day with no samples is 0 (not missing) when the phone was
 #              demonstrably in use that day (rollup.zero_fill_anchor has data)
@@ -55,16 +55,6 @@ metrics:
   HKQuantityTypeIdentifierAppleWalkingSteadiness: {name: walking_steadiness_pct, agg: mean, unit: "%", kind: gait, label: Walking steadiness, plausible: [0, 100]}
   HKQuantityTypeIdentifierHeadphoneAudioExposure: {name: headphone_db, agg: leq, unit: dBASPL, kind: audio, label: Headphone level (LAeq), plausible: [30, 110]}
   HKCategoryTypeIdentifierHeadphoneAudioExposureEvent: {name: headphone_alerts, agg: count, unit: count, kind: audio, label: Headphone loudness alerts, zero_fill: true}
-  HKQuantityTypeIdentifierDietaryEnergyConsumed: {name: intake_kcal, agg: sum, unit: kcal, kind: nutrition, label: Energy intake (logged), plausible: [0, 6000]}
-  HKQuantityTypeIdentifierDietaryProtein:       {name: protein_g, agg: sum, unit: g, kind: nutrition, label: Protein}
-  HKQuantityTypeIdentifierDietaryCarbohydrates: {name: carbs_g, agg: sum, unit: g, kind: nutrition, label: Carbohydrates}
-  HKQuantityTypeIdentifierDietaryFatTotal:      {name: fat_g, agg: sum, unit: g, kind: nutrition, label: Fat}
-  HKQuantityTypeIdentifierDietaryFiber:         {name: fiber_g, agg: sum, unit: g, kind: nutrition, label: Fiber}
-  HKQuantityTypeIdentifierDietarySugar:         {name: sugar_g, agg: sum, unit: g, kind: nutrition, label: Sugar}
-  HKQuantityTypeIdentifierDietarySodium:        {name: sodium_mg, agg: sum, unit: mg, kind: nutrition, label: Sodium}
-  HKQuantityTypeIdentifierBodyMass:             {name: weight_kg, agg: mean, unit: kg, kind: body, label: Body weight, plausible: [30, 250]}
-  HKQuantityTypeIdentifierBodyFatPercentage:    {name: body_fat_pct, agg: mean, unit: "%", kind: body, label: Body fat}
-  HKQuantityTypeIdentifierBodyMassIndex:        {name: bmi, agg: mean, unit: count, kind: body, label: BMI}
   HKCategoryTypeIdentifierSleepAnalysis:        {name: sleep, agg: sleep, unit: hr, kind: sleep, label: Sleep}
 
 default_rules:
@@ -73,7 +63,6 @@ default_rules:
   cumulative_agg: sum
   sample_agg: mean
   category_agg: count
-  dietary_prefix: HKQuantityTypeIdentifierDietary   # -> kind: nutrition, agg: sum
 
 # Source deduplication: for each (type, local day) only the highest-priority
 # source that has data that day is used. Sources not listed rank below listed
@@ -92,12 +81,6 @@ source_priority:
   default: []           # e.g. ["Someone's iPhone"]
   # HKQuantityTypeIdentifierActiveEnergyBurned: ["iPhone", "MyFitnessPal"]
 
-nutrition:
-  energy_metric: intake_kcal
-  min_entries: 3          # food log entries (energy records) in the day
-  min_kcal: 1200          # below this the day is almost certainly partially logged
-  max_kcal: 5000          # above this the day is almost certainly a logging error
-
 quality:
   gap_min_days: 3         # report runs of >= this many missing days
   outlier_window_days: 28
@@ -106,9 +89,6 @@ quality:
 analysis:
   start_date: null        # e.g. "2022-01-01"; null = use all data
   min_coverage_days: 30   # metrics with fewer observed days are hidden from analyses
-
-trends:
-  weight_ewma_halflife_days: 10
 
 correlations:
   min_n: 60
@@ -125,12 +105,6 @@ correlations:
     - [distance_km, active_kcal]
     - [steps, flights]
     - [walking_speed_kmh, step_length_cm]
-    - [intake_kcal, protein_g]
-    - [intake_kcal, carbs_g]
-    - [intake_kcal, fat_g]
-    - [intake_kcal, sugar_g]
-    - [carbs_g, sugar_g]
-    - [carbs_g, fiber_g]
     - [active_kcal, basal_kcal]
     - [active_kcal, flights]               # climbing is part of active energy
     - [double_support_pct, walking_speed_kmh]   # gait biomechanics
@@ -153,18 +127,30 @@ seasonal:
   periods:
     school_year: []            # e.g. [["2023-09-01", "2024-06-10"], ["2024-09-03", "2025-06-12"]]
 
-energy:
-  kcal_per_kg: 7700
-  window_days: 28
-  min_logged_days: 14         # well-logged days required inside a window
-  min_weigh_ins: 4            # weigh-ins required inside a window
-  estimator: ols              # ols | ewma  (weight change per window; DECISIONS.md E3)
-  trajectory_sims: 400
-  logging_error_sd: 0.10      # per-day relative error of logged intake (trajectory sim)
-  apple_bias_sd: 0.08         # run-level relative uncertainty of Apple's expenditure
-  seed: 7
+changepoints:
+  metrics: [steps, distance_km, walking_speed_kmh, step_length_cm, asymmetry_pct, double_support_pct]
+  resolution: week            # week | day  (weekly means of days, weeks need >= min_obs_per_week days)
+  min_obs_per_week: 4
+  min_segment: 4              # bins (4 weeks): shorter regimes are not reported
+  penalty_multiplier: 1.0     # x BIC penalty 2*log(n) on the long-run-standardised series
+  log_metrics: [steps, distance_km]   # multiplicative shifts
+  sensitivity_multipliers: [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+  stability_tolerance: 2      # bins
+  max_phi: 0.8                # cap on the autocorrelation inflation of the noise scale
+  winsor: 3.0                 # clip the standardised series at +/- this many long-run SDs
+  bocpd_expected_run: 26      # bins (half a year at weekly resolution)
+  bocpd_min_run: 4
+  block_days: 7
+  bootstrap_reps: 1000
+  seed: 0
+  event_tolerance_days: 21    # match a changepoint to an event within this many days
+  # Annotate the timeline with life events (date = first day of the new situation).
+  life_events: []
+  #  - {date: "2024-09-01", label: "Started university"}
+  #  - {date: "2025-01-15", label: "Moved apartments"}
 
 forecast:
+  targets: [steps, walking_speed_kmh]
   horizon_days: 7
   n_splits: 12             # rolling-origin folds of horizon_days each
   max_train_days: 730
@@ -184,3 +170,7 @@ demo:
     - {start: "2026-06-20", end: "2026-08-25", timezone: Europe/Sofia, label: bulgaria_summer}
   periods:
     school_year: [["2025-04-01", "2025-06-12"], ["2025-09-03", "2026-06-12"]]
+  life_events:
+    - {date: "2025-11-17", label: "New job with a car commute (synthetic)"}
+    - {date: "2026-03-16", label: "Ankle injury (synthetic)"}
+    - {date: "2026-04-27", label: "Cleared to walk normally (synthetic)"}

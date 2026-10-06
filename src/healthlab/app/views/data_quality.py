@@ -8,13 +8,13 @@ import streamlit as st
 from healthlab.app.common import (SEQ_BLUE, SERIES, MUTED, cfg, connection, data, label, require_data,
                                   style, to_display)
 from healthlab.quality import (activity_timing, coverage_matrix, gap_summary, hardware_timeline,
-                               logging_summary, outlier_table, source_breakdown, source_monthly,
+                               outlier_table, source_breakdown, source_monthly,
                                source_summary)
 
 st.title("Data Quality")
 require_data()
-# Quality checks look at *all* data, including partially logged nutrition days.
-daily, catalog = data(mask_nutrition=False, respect_start=False)
+# Quality checks look at *all* data, ignoring analysis.start_date.
+daily, catalog = data(respect_start=False)
 c = cfg()
 metrics = [m for m in catalog["metric"] if m in daily]
 
@@ -27,23 +27,6 @@ fig = px.imshow(cov, aspect="auto", color_continuous_scale=SEQ_BLUE, zmin=0, zma
 fig.update_traces(hovertemplate="%{y}<br>%{x|%b %Y}: %{z:.0%}<extra></extra>")
 st.plotly_chart(style(fig, height=60 + 28 * len(cov), hovermode="closest"), width="stretch")
 st.caption("A metric's coverage before its first sample is 0 by definition; that's not a gap.")
-
-# -- Nutrition logging -------------------------------------------------------------
-logs = logging_summary(daily, c)
-st.subheader("Food-logging coverage")
-if logs is None:
-    st.info("No dietary energy records in this export, so the nutrition module is inactive.")
-else:
-    n = c.section("nutrition")
-    st.markdown(f"A day is **well logged** when it has ≥ {n['min_entries']} entries and "
-                f"{n['min_kcal']}–{n['max_kcal']} kcal. Only well-logged days enter any nutrition analysis; "
-                "unlogged days are missing, not zero.")
-    order = [k for k in ["well logged", "partial / implausible", "not logged"] if k in logs]
-    fig = go.Figure()
-    for k, col in zip(order, [SERIES[2], SERIES[3], MUTED]):
-        fig.add_bar(x=logs.index, y=logs[k], name=k, marker_color=col)
-    fig.update_layout(barmode="stack", bargap=0.15)
-    st.plotly_chart(style(fig, title="Days per month by logging status"), width="stretch")
 
 # -- Gaps -----------------------------------------------------------------------------
 st.subheader("Logging gaps")

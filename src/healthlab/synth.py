@@ -8,19 +8,17 @@ derived from real data.
 Planted structure (all parameters in :data:`TRUTH_PARAMS`):
 
 * **Weekly seasonality** in steps (Saturday high, Sunday low).
-* **Summers in Bulgaria** (``demo.timezone_overrides``): +35 % steps and a
-  holiday energy surplus. Those days are lived in Europe/Sofia local time, so the
-  configured time-zone override is needed to put each sample on the right day.
-  Samples of LA days that fall inside an override window (the departure
-  afternoon) are dropped, mimicking a travel day.
+* **Summers in Bulgaria** (``demo.timezone_overrides``): +35 % steps. Those days
+  are lived in Europe/Sofia local time, so the configured time-zone override is
+  needed to put each sample on the right day. Samples of LA days that fall inside
+  an override window (the departure afternoon) are dropped, mimicking a travel day.
 * **Lag-1 effect**: steps on day t raise walking speed on day t+1.
-* **Lag-2 effect**: active energy on day t raises energy intake on day t+2.
-* **Energy balance**: weight follows true intake − true TDEE at 7,700 kcal/kg
-  (a 250 kcal/day cut for the first 240 days, then maintenance).
-* **Food logging**: streaky logging with partial days and gaps; logged intake
-  under-reports true intake by 15 %.
-* **Apple bias**: Apple's active energy overestimates the truth by 15 %, and its
-  basal estimate is 50 kcal/day high.
+* **Lag-2 effect**: flights climbed on day t raise walking asymmetry on day t+2.
+* **Regime shifts (changepoints)**: a car commute from ``commute_day`` cuts steps
+  by 30 % for good; an injury from ``injury_start_day`` to ``injury_end_day``
+  slows walking and raises asymmetry and double support; the phone upgrade on
+  ``phone_upgrade_day`` shifts measured step length and double support (a device
+  artifact, not a change in the person). Summer starts/ends are shifts in steps too.
 * **Source overlap**: a second app duplicates some active-energy samples, so source
   dedup is exercised.
 * **Sleep**: only the last 14 days (tracking "just enabled").
@@ -28,6 +26,8 @@ Planted structure (all parameters in :data:`TRUTH_PARAMS`):
   ``iPhone15,2`` on day ``phone_upgrade_day``. A foreign "Partner's iPhone" writes
   steps on some days, including days the demo phone has no data; demo mode
   excludes it via ``demo.source_exclude``.
+
+Nutrition and body weight are deliberately not generated (out of scope).
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ import json
 import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Callable
 from pathlib import Path
+from typing import Callable
 from xml.sax.saxutils import quoteattr
 from zoneinfo import ZoneInfo
 
@@ -49,30 +49,27 @@ from .timeutil import ZoneOverride
 
 Q = "HKQuantityTypeIdentifier"
 PHONE = "Demo iPhone"
-FOOD_APP = "DemoFood"
 FIT_APP = "DemoFit"
-LB_PER_KG = 1 / 0.45359237
+PARTNER = "Partner's iPhone"
 MI_PER_KM = 1 / 1.609344
 
 TRUTH_PARAMS = {
-    "kcal_per_kg": 7700.0,
     "steps_base": 7500.0,
     "weekday_factor": [0.95, 1.0, 1.0, 1.0, 1.1, 1.3, 0.8],     # Mon..Sun
     "summer_steps_multiplier": 1.35,
-    "steps_log_ar": 0.5, "steps_log_sd": 0.25,
+    "steps_log_ar": 0.3, "steps_log_sd": 0.18,
     "speed_base_kmh": 4.6, "speed_per_steps_z_lag1": 0.10, "speed_noise_sd": 0.12,
-    "true_basal_kcal": 1750.0, "active_kcal_per_step": 0.045,
-    "apple_active_multiplier": 1.15, "apple_basal_offset": 50.0,
-    "cut_kcal": -250.0, "cut_days": 240, "summer_surplus_kcal": 200.0,
-    "intake_per_active_dev_lag2": 1.5, "intake_noise_sd": 250.0,
-    "underreport": 0.15,
-    "logging_stay_on": 0.88, "logging_stay_off": 0.6, "partial_share": 0.12,
-    "weight_start_kg": 84.0, "weight_noise_sd": 0.45, "weigh_in_prob": 5 / 7,
+    "flights_per_base_steps": 10.0, "asym_per_flight_dev_lag2": 0.14,
+    "basal_kcal": 1800.0, "active_kcal_per_step": 0.05,
     "missing_phone_day_prob": 0.03,
+    # Regime shifts (day indices from the start date).
+    "commute_day": 230, "commute_steps_multiplier": 0.70,
+    "injury_start_day": 349, "injury_end_day": 391,
+    "injury_speed_kmh": -0.35, "injury_asymmetry_pct": 4.0, "injury_double_support_pct": 1.5,
     "phone_upgrade_day": 300, "hardware_before": "iPhone12,1", "hardware_after": "iPhone15,2",
+    "upgrade_step_length_cm": 3.0, "upgrade_double_support_pct": -0.8,
     "partner_extra_day_prob": 0.05,
 }
-PARTNER = "Partner's iPhone"
 
 
 def _device(hardware: str, software: str) -> str:
@@ -118,50 +115,42 @@ class _Writer:
 
 
 def _latent(days: pd.DatetimeIndex, summer: np.ndarray, rng: np.random.Generator) -> pd.DataFrame:
-    """Daily latent truth: steps, gait, energy, intake, weight, logging status."""
+    """Daily latent truth: steps, flights, gait metrics, energy estimates."""
     P = TRUTH_PARAMS
     n = len(days)
-    # Steps: weekly pattern x summer x AR(1) log-noise.
+    t = np.arange(n)
+    commute = t >= P["commute_day"]
+    injured = (t >= P["injury_start_day"]) & (t < P["injury_end_day"])
+    upgraded = t >= P["phone_upgrade_day"]
+
+    # Steps: weekly pattern x summer x commute regime x AR(1) log-noise.
     eps = np.zeros(n)
     for i in range(1, n):
         eps[i] = P["steps_log_ar"] * eps[i - 1] + rng.normal(0, P["steps_log_sd"])
     wf = np.asarray(P["weekday_factor"])[days.dayofweek]
-    steps = P["steps_base"] * wf * np.where(summer, P["summer_steps_multiplier"], 1.0) * np.exp(eps)
+    steps = (P["steps_base"] * wf * np.where(summer, P["summer_steps_multiplier"], 1.0)
+             * np.where(commute, P["commute_steps_multiplier"], 1.0) * np.exp(eps))
     steps = np.round(steps)
     z_steps = (steps - steps.mean()) / steps.std()
+    flights = rng.poisson(P["flights_per_base_steps"] * steps / P["steps_base"])
 
-    speed = P["speed_base_kmh"] + rng.normal(0, P["speed_noise_sd"], n)
+    speed = P["speed_base_kmh"] + rng.normal(0, P["speed_noise_sd"], n) + np.where(injured, P["injury_speed_kmh"], 0.0)
     speed[1:] += P["speed_per_steps_z_lag1"] * z_steps[:-1]                       # planted lag-1
-    step_len = 70 + 9 * (speed - P["speed_base_kmh"]) + rng.normal(0, 1.5, n)
-    dsupport = 30 - 2.5 * (speed - P["speed_base_kmh"]) + rng.normal(0, 0.6, n)
-    asym = rng.gamma(1.2, 1.4, n)
+    # Step length / double support follow speed; the new phone measures them differently.
+    step_len = (70 + 9 * (speed - P["speed_base_kmh"]) + rng.normal(0, 1.5, n)
+                + np.where(upgraded, P["upgrade_step_length_cm"], 0.0))
+    dsupport = (30 - 2.5 * (speed - P["speed_base_kmh"]) + rng.normal(0, 0.6, n)
+                + np.where(injured, P["injury_double_support_pct"], 0.0)
+                + np.where(upgraded, P["upgrade_double_support_pct"], 0.0))
+    asym = rng.gamma(1.2, 1.4, n) + np.where(injured, P["injury_asymmetry_pct"], 0.0)
+    asym[2:] += P["asym_per_flight_dev_lag2"] * (flights[:-2] - flights.mean())   # planted lag-2
+    asym = np.clip(asym, 0, None)
 
-    active_true = P["active_kcal_per_step"] * steps * rng.normal(1, 0.05, n)
-    tdee_true = P["true_basal_kcal"] + active_true
-    plan = np.where(np.arange(n) < P["cut_days"], P["cut_kcal"], 0.0) + np.where(summer, P["summer_surplus_kcal"], 0.0)
-    act_dev = active_true - active_true.mean()
-    intake_true = tdee_true + plan + rng.normal(0, P["intake_noise_sd"], n)
-    intake_true[2:] += P["intake_per_active_dev_lag2"] * act_dev[:-2]                # planted lag-2
-
-    weight = np.empty(n)
-    weight[0] = P["weight_start_kg"]
-    for i in range(1, n):
-        weight[i] = weight[i - 1] + (intake_true[i - 1] - tdee_true[i - 1]) / P["kcal_per_kg"]
-
-    # Streaky logging: Markov chain on/off, with some "on" days only partially logged.
-    on = np.zeros(n, dtype=bool)
-    on[0] = True
-    for i in range(1, n):
-        stay = P["logging_stay_on"] if on[i - 1] else P["logging_stay_off"]
-        on[i] = on[i - 1] if rng.uniform() < stay else not on[i - 1]
-    partial = on & (rng.uniform(size=n) < P["partial_share"])
-    status = np.where(~on, "none", np.where(partial, "partial", "well"))
+    active = P["active_kcal_per_step"] * steps * rng.normal(1, 0.05, n)
     phone_missing = rng.uniform(size=n) < P["missing_phone_day_prob"]
-
     return pd.DataFrame({
-        "steps": steps, "speed": speed, "step_len": step_len, "dsupport": dsupport, "asym": asym,
-        "active_true": active_true, "tdee_true": tdee_true, "intake_true": intake_true, "weight_true": weight,
-        "log_status": status, "phone_missing": phone_missing, "summer": summer,
+        "steps": steps, "flights": flights, "speed": speed, "step_len": step_len, "dsupport": dsupport,
+        "asym": asym, "active": active, "phone_missing": phone_missing, "summer": summer,
     }, index=days)
 
 
@@ -170,6 +159,25 @@ def _hour_weights() -> np.ndarray:
     h = np.arange(24)
     w = np.exp(-0.5 * ((h - 14) / 4.0) ** 2) * (h >= 7)
     return w / w.sum()
+
+
+def planted_changepoints(start: pd.Timestamp, overrides: list[ZoneOverride]) -> dict[str, list[str]]:
+    """Dates (first day of the new regime) of every planted shift, per daily metric."""
+    P = TRUTH_PARAMS
+    d = lambda k: str((start + pd.Timedelta(days=P[k])).date())  # noqa: E731
+    summer = []
+    for o in overrides:
+        summer += [o.start.isoformat(), (o.end + timedelta(days=1)).isoformat()]
+    injury = [d("injury_start_day"), d("injury_end_day")]
+    activity = sorted(summer + [d("commute_day")])
+    return {
+        "steps": activity,
+        "distance_km": activity,
+        "walking_speed_kmh": injury,
+        "step_length_cm": sorted([d("phone_upgrade_day")] + injury),
+        "double_support_pct": sorted([d("phone_upgrade_day")] + injury),
+        "asymmetry_pct": injury,
+    }
 
 
 def write_synthetic_export(out: str | Path, cfg: Config, days: int | None = None, seed: int | None = None) -> dict:
@@ -237,14 +245,16 @@ def write_synthetic_export(out: str | Path, cfg: Config, days: int | None = None
                 w.record(Q + "StepCount", stp, st_, en_, unit="count", offset=odd_offset if k == 0 else None)
                 km = stp * r.step_len / 100000
                 w.record(Q + "DistanceWalkingRunning", km * MI_PER_KM, st_, en_, unit="mi")
-                w.record(Q + "ActiveEnergyBurned", r.active_true * P["apple_active_multiplier"] * sh, st_, en_, unit="Cal")
+                w.record(Q + "ActiveEnergyBurned", r.active * sh, st_, en_, unit="Cal")
                 if k % 4 == 0 and rng.uniform() < 0.3:
                     # Duplicate from a second app: must not be double counted.
-                    w.record(Q + "ActiveEnergyBurned", r.active_true * sh, st_, en_, unit="Cal", source=FIT_APP)
-            n_fl = rng.poisson(10 * r.steps / P["steps_base"])
+                    w.record(Q + "ActiveEnergyBurned", r.active * sh * 0.9, st_, en_, unit="Cal", source=FIT_APP)
             # Distinct whole seconds: identical (type, value, start, end) samples would be
             # deduplicated by design (DECISIONS.md I5), and real sensors never emit them.
+            n_fl = int(r.flights)
             fl_secs = np.unique((rng.choice(24, n_fl, p=hw) * 3600 + rng.integers(0, 3240, n_fl)))
+            while len(fl_secs) < n_fl:  # top up the rare collisions so the daily count is exact
+                fl_secs = np.unique(np.r_[fl_secs, rng.choice(24, 1, p=hw) * 3600 + rng.integers(0, 3240, 1)])
             for sec in fl_secs:
                 t = at(day, sec / 3600)
                 w.record(Q + "FlightsClimbed", 1, t, t + timedelta(seconds=20), unit="count")
@@ -259,33 +269,9 @@ def write_synthetic_export(out: str | Path, cfg: Config, days: int | None = None
                 for _ in range(rng.integers(3, 12)):
                     t = at(day, rng.choice(24, p=hw) + rng.uniform(0, 0.9))
                     w.record(Q + "HeadphoneAudioExposure", rng.normal(68, 6), t, t + timedelta(minutes=float(rng.uniform(5, 30))), unit="dBASPL")
-        # Basal: hourly through the whole day (Apple estimate, slightly high).
-        basal = (P["true_basal_kcal"] + P["apple_basal_offset"]) / 24
+        # Basal: hourly through the whole day (Apple estimate).
         for hr in range(24):
-            w.record(Q + "BasalEnergyBurned", basal * rng.normal(1, 0.02), at(day, hr), at(day, hr + 1), unit="Cal")
-
-        # Food log.
-        logged_total = r.intake_true * (1 - P["underreport"])
-        if r.log_status == "well":
-            parts = rng.dirichlet(np.ones(int(rng.integers(3, 6))) * 3)
-        elif r.log_status == "partial":
-            parts = rng.dirichlet(np.ones(int(rng.integers(1, 3)))) * 0.35
-        else:
-            parts = []
-        for j, sh in enumerate(parts):
-            t = at(day, 8 + j * 3.5 + rng.uniform(0, 1))
-            kcal = logged_total * sh
-            prot, carb, fat = rng.dirichlet(np.array([0.25, 0.45, 0.30]) * 20)  # meal-level macro split
-            w.record(Q + "DietaryEnergyConsumed", kcal, t, t, unit="kcal", source=FOOD_APP)
-            w.record(Q + "DietaryProtein", prot * kcal / 4, t, t, unit="g", source=FOOD_APP)
-            w.record(Q + "DietaryCarbohydrates", carb * kcal / 4, t, t, unit="g", source=FOOD_APP)
-            w.record(Q + "DietaryFatTotal", fat * kcal / 9, t, t, unit="g", source=FOOD_APP)
-
-        # Weigh-ins (morning, in lb, written by the food app).
-        if rng.uniform() < P["weigh_in_prob"]:
-            t = at(day, 7.5 + rng.uniform(0, 0.5))
-            kg = r.weight_true + rng.normal(0, P["weight_noise_sd"])
-            w.record(Q + "BodyMass", kg * LB_PER_KG, t, t, unit="lb", source=FOOD_APP)
+            w.record(Q + "BasalEnergyBurned", P["basal_kcal"] / 24 * rng.normal(1, 0.02), at(day, hr), at(day, hr + 1), unit="Cal")
 
         # Sleep only for the last two weeks.
         if i >= days - 14:
@@ -316,19 +302,16 @@ def write_synthetic_export(out: str | Path, cfg: Config, days: int | None = None
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("apple_health_export/export.xml", header + "".join(w.lines) + "".join(workouts) + "</HealthData>\n")
 
-    apple_tdee = lat["active_true"] * P["apple_active_multiplier"] + P["true_basal_kcal"] + P["apple_basal_offset"]
+    observed = ~lat["phone_missing"]
     truth = {
         "seed": seed, "days": days, "start_date": str(idx[0].date()), "end_date": str(idx[-1].date()),
         "n_records": w.n, "params": TRUTH_PARAMS,
-        "true_tdee_mean": float(lat["tdee_true"].mean()),
-        "apple_tdee_mean": float(apple_tdee.mean()),
-        "true_intake_mean": float(lat["intake_true"].mean()),
-        "weight_start": float(lat["weight_true"].iloc[0]), "weight_end": float(lat["weight_true"].iloc[-1]),
-        "share_well_logged_planned": float((lat["log_status"] == "well").mean()),
+        "active_kcal_mean": float(lat.loc[observed, "active"].mean()),
         "planted_lags": [
             {"x": "steps", "y": "walking_speed_kmh", "lag": 1, "sign": 1},
-            {"x": "active_kcal", "y": "intake_kcal", "lag": 2, "sign": 1},
+            {"x": "flights", "y": "asymmetry_pct", "lag": 2, "sign": 1},
         ],
+        "planted_changepoints": planted_changepoints(start, overrides),
         "summer_periods": [[o.start.isoformat(), o.end.isoformat()] for o in overrides],
         "travel_days": sorted(str(d.date()) for d in travel_days),
         "daily_steps": {str(d.date()): (None if lat["phone_missing"].iat[i] else float(lat["steps"].iat[i]))

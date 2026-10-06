@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 from healthlab.analysis.correlations import scan
-from healthlab.analysis.energy import EnergyParams, expected_trajectory, implied_daily_discrepancy, summarize, window_tdee
+from healthlab.analysis.changepoints import CPParams, all_events, bocpd, detect_all, match_events, segment_effects
 from healthlab.analysis.forecast import ForecastParams, evaluate
 from healthlab.analysis.seasonal import compare_periods, label_days
 from healthlab.config import load_config
@@ -35,7 +35,7 @@ def demo(tmp_path_factory):
     rebuild_daily(cfg, db_path=db)
     con = sqlite3.connect(db)
     return {"cfg": cfg, "truth": truth, "con": con, "first": first, "second": second,
-            "daily": load_daily(con), "raw": load_daily(con, mask_nutrition=False), "catalog": load_catalog(con),
+            "daily": load_daily(con), "raw": load_daily(con), "catalog": load_catalog(con),
             "truth_file": json.loads((root / "truth.json").read_text())}
 
 
@@ -54,30 +54,23 @@ def test_daily_table_shape_and_cutoff(demo):
     d, t = demo["raw"], demo["truth"]
     assert str(d.index.min().date()) == t["start_date"]
     assert str(d.index.max().date()) == t["end_date"]
-    expected = {"steps", "distance_km", "active_kcal", "basal_kcal", "walking_speed_kmh", "intake_kcal",
-                "protein_g", "weight_kg", "sleep_asleep_h", "well_logged", "n_food_entries"}
+    expected = {"steps", "distance_km", "flights", "active_kcal", "basal_kcal", "walking_speed_kmh",
+                "step_length_cm", "double_support_pct", "asymmetry_pct", "headphone_db", "sleep_asleep_h"}
     assert expected <= set(d.columns)
-    # Weight came in as lb and must be back in kg.
-    assert d["weight_kg"].between(60, 100).all() or d["weight_kg"].dropna().between(60, 100).all()
+    # Out of scope: no nutrition / weight columns or coverage flags are produced.
+    assert not {"intake_kcal", "weight_kg", "well_logged", "n_food_entries"} & set(d.columns)
+    # Imperial raw units come back metric.
+    assert d["step_length_cm"].dropna().between(55, 90).all()
+    assert d["walking_speed_kmh"].dropna().between(3, 6.5).all()
 
 
 def test_source_dedup_avoids_double_counting(demo):
     t, d = demo["truth"], demo["raw"]
-    P = t["params"]
-    apple_active_truth = t["apple_tdee_mean"] - P["true_basal_kcal"] - P["apple_basal_offset"]
-    assert d["active_kcal"].mean() == pytest.approx(apple_active_truth, rel=0.04)
+    # DemoFit duplicates some samples; summing both sources would inflate the mean ~5-10 %.
+    assert d["active_kcal"].mean() == pytest.approx(t["active_kcal_mean"], rel=0.03)
     used = demo["con"].execute(
         "SELECT DISTINCT source_used FROM daily_sources WHERE metric='active_kcal'").fetchall()
     assert used == [("Demo iPhone",)]
-
-
-def test_logging_coverage(demo):
-    d, t = demo["raw"], demo["truth"]
-    share = d["well_logged"].mean()
-    assert abs(share - t["share_well_logged_planned"]) < 0.06
-    assert d.loc[d["n_food_entries"] == 0, "intake_kcal"].isna().all()          # missing, not zero
-    masked = demo["daily"]
-    assert masked.loc[~d["well_logged"], "intake_kcal"].isna().all()
 
 
 def test_sleep_only_recent(demo):
@@ -98,27 +91,6 @@ def test_planted_lagged_correlations_recovered(demo):
         # Reverse direction at the same lag is much weaker.
         rev = res[(res["x"] == pl["y"]) & (res["y"] == pl["x"]) & (res["lag"] == pl["lag"])]
         assert abs(rev["rho"].iat[0]) < abs(best["rho"]) / 2
-
-
-def test_energy_balance_recovers_truth(demo):
-    cfg, d, t = demo["cfg"], demo["daily"], demo["truth"]
-    base = EnergyParams.from_config(cfg.section("energy"), cfg.section("trends"))
-    naive = summarize(window_tdee(d, base), base)
-    adj_p = EnergyParams(**{**base.__dict__, "underreport": t["params"]["underreport"]})
-    adj = summarize(window_tdee(d, adj_p), adj_p)
-    assert adj["tdee_mean"] == pytest.approx(t["true_tdee_mean"], abs=150)
-    assert naive["tdee_mean"] < t["true_tdee_mean"] - 200          # under-reporting bias is visible
-    assert adj["apple_mean"] == pytest.approx(t["apple_tdee_mean"], rel=0.03)
-    assert naive["gap_mean"] < 0                                     # Apple over-estimates
-    traj = expected_trajectory(d, base, n_sims=100)
-    assert implied_daily_discrepancy(traj, base.kcal_per_kg) < -150   # predicts too much loss
-
-
-def test_ewma_estimator_also_reasonable(demo):
-    cfg, d, t = demo["cfg"], demo["daily"], demo["truth"]
-    p = EnergyParams.from_config(cfg.section("energy"), cfg.section("trends"), estimator="ewma",
-                                 underreport=t["params"]["underreport"])
-    assert summarize(window_tdee(d, p), p)["tdee_mean"] == pytest.approx(t["true_tdee_mean"], abs=250)
 
 
 def test_summer_effect_recovered(demo):
@@ -184,3 +156,38 @@ def test_foreign_source_excluded_and_device_upgrade_visible(demo):
     assert phone["hardware"].tolist() == ["iPhone12,1", "iPhone15,2"]
     upgrade = pd.Timestamp(t["start_date"]) + pd.Timedelta(days=t["params"]["phone_upgrade_day"])
     assert abs((pd.Timestamp(phone["first_date"].iloc[1]) - upgrade).days) <= 1
+
+
+def test_planted_changepoints_recovered(demo):
+    """Every planted regime shift is found by PELT within ±21 days; few unexplained extras."""
+    cfg, d, t = demo["cfg"], demo["daily"], demo["truth"]
+    cc = cfg.section("changepoints")
+    p = CPParams.from_config(cc)
+    res = detect_all(d, cc["metrics"], p)
+    tol = pd.Timedelta(days=21)
+    events = all_events(demo["con"], cfg)
+    assert set(events["kind"]) == {"life event", "device", "travel"}
+    for metric, planted in t["planted_changepoints"].items():
+        found = res[metric].changepoints
+        for date in pd.to_datetime(planted):
+            assert any(abs(f - date) <= tol for f in found), f"{metric}: planted {date.date()} not found in {found}"
+        # Extras must be explainable by a known event (e.g. the commute lowering walking speed
+        # through the planted steps -> speed link); at most one unexplained per metric.
+        unexplained = match_events(found, events, 21)["event"].isna().sum()
+        assert unexplained <= 1, f"{metric}: {unexplained} unexplained changepoints"
+
+
+def test_changepoint_effects_and_bocpd_agree_with_truth(demo):
+    cfg, d, t = demo["cfg"], demo["daily"], demo["truth"]
+    p = CPParams.from_config(cfg.section("changepoints"))
+    res = detect_all(d, ["steps", "asymmetry_pct"], p)
+    # Commute: steps fall by ~30 % (Cliff's delta clearly negative, CI excludes 0).
+    commute = pd.Timestamp(t["planted_changepoints"]["steps"][2])
+    eff = segment_effects(d["steps"], res["steps"], p)
+    row = eff.loc[(eff["changepoint"] - commute).abs().idxmin()]
+    assert row["pct_change"] < -0.15 and row["ci_hi"] < 0 and row["cliffs_delta"] < -0.3
+    # Injury: asymmetry rises; BOCPD independently finds both injury boundaries.
+    trace, bc = bocpd(res["asymmetry_pct"].z, p.bocpd_expected_run, p.bocpd_min_run)
+    for date in pd.to_datetime(t["planted_changepoints"]["asymmetry_pct"]):
+        assert any(abs(b - date) <= pd.Timedelta(days=21) for b in bc)
+    assert trace["p_new_regime"].between(0, 1).all()

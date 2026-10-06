@@ -4,9 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from healthlab.analysis.trend import ewma_alpha, rolling, weight_trend
-from healthlab.app.common import (SERIES, MUTED, analysable_metrics, cfg, has_metric, label, meta,
-                                  require_data, style, to_display)
+from healthlab.analysis.trend import rolling
+from healthlab.app.common import SERIES, MUTED, analysable_metrics, label, meta, require_data, style, to_display
 
 st.title("Trends")
 daily, catalog = require_data()
@@ -70,24 +69,3 @@ if dow["dow"].nunique() == 7:
     h, p = kruskal(*[g["v"].to_numpy() for _, g in dow.groupby("dow")])
     st.caption(f"Kruskal–Wallis across weekdays: H = {h:.1f}, p = {p:.2g}, n = {len(dow)} days. "
                "Daily values are autocorrelated, so treat p as optimistic.")
-
-# -- Weight --------------------------------------------------------------------------
-st.subheader("Body weight")
-if not has_metric(daily, "weight_kg", 5):
-    st.info("No body-weight readings in this database. The weight trend is part of the optional "
-            "nutrition/weight module; run `healthlab demo` to see it.")
-else:
-    hl = float(cfg().section("trends").get("weight_ewma_halflife_days", 10))
-    w = daily["weight_kg"]
-    tr = weight_trend(w, hl)
-    wd, wunit = to_display(w, "weight_kg", catalog)
-    td, _ = to_display(tr, "weight_kg", catalog)
-    fig = go.Figure()
-    fig.add_scatter(x=wd.index, y=wd, mode="markers", name="Weigh-ins", marker=dict(size=6, color=MUTED))
-    fig.add_scatter(x=td.index, y=td, name=f"EWMA trend (half-life {hl:g} d)", line=dict(color=SERIES[1], width=2))
-    st.plotly_chart(style(fig, title=f"Weight ({wunit})"), width="stretch")
-    st.caption(
-        f"Trend = time-aware exponentially weighted mean with a {hl:g}-day half-life "
-        f"(α ≈ {ewma_alpha(hl):.3f} per day). Day-to-day scale readings swing ±0.5–1 kg with water and gut "
-        "content; a ~10-day half-life suppresses that noise while still following a real 0.5 kg/week change "
-        "within about two weeks. See DECISIONS.md.")

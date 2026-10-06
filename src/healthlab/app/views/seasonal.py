@@ -29,8 +29,10 @@ if mode == "Configured periods":
         st.error(f"Period configuration error: {e}")
         st.stop()
     names = list(configured)
+    # Default A = the first travel-period label (e.g. bulgaria_summer), so "summer vs school year" reads naturally.
+    travel = [o.label for o in c.timezone_overrides if o.label in names]
     c1, c2 = st.columns(2)
-    a = c1.selectbox("Period A", names, index=0)
+    a = c1.selectbox("Period A", names, index=names.index(travel[0]) if travel else 0)
     b = c2.selectbox("Period B", [n for n in names if n != a], index=0)
     with st.expander("Date ranges"):
         for n in (a, b):

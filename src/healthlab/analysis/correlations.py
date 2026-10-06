@@ -60,8 +60,7 @@ def scan(daily: pd.DataFrame, metrics: list[str], *, max_lag: int = 3, min_n: in
     """Run the lagged correlation scan.
 
     Args:
-        daily: daily table (DatetimeIndex). Nutrition columns should already be
-            masked to well-logged days (``load_daily`` does this).
+        daily: daily table (DatetimeIndex), as returned by ``load_daily``.
         metrics: columns to include.
         max_lag: maximum lag in days; lag k pairs x(t) with y(t+k).
         min_n: pairs with fewer overlapping observations are not tested.

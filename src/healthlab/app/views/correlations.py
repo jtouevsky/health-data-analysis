@@ -43,7 +43,7 @@ chance. **Benjamini–Hochberg** q-values control the *false discovery rate* acr
 q < {cc['fdr_alpha']} means that among everything you call a discovery at this threshold, you expect at most
 {cc['fdr_alpha']:.0%} to be false.
 
-**Mechanical pairs** (steps↔distance, macros↔calories, and the basal-energy artifact) are flagged and ranked last.
+**Mechanical pairs** (steps↔distance, gait biomechanics, and the basal-energy artifact) are flagged and ranked last.
 
 **Persistence caveat.** If x and y move together on the same day and both persist for several days, x(t) will
 also correlate with y(t+1) without any lead–lag mechanism. Compare lagged ρ with the same-day ρ in the drill-down.

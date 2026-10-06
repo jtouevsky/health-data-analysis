@@ -34,19 +34,19 @@ def _db_mtime(path: Path) -> float:
 
 
 @st.cache_data(show_spinner=False)
-def _load(db: str, mtime: float, mask: bool, start: str | None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _load(db: str, mtime: float, start: str | None) -> tuple[pd.DataFrame, pd.DataFrame]:
     con = sqlite3.connect(db)
     try:
-        return load_daily(con, mask_nutrition=mask, start_date=start), load_catalog(con)
+        return load_daily(con, start_date=start), load_catalog(con)
     finally:
         con.close()
 
 
-def data(mask_nutrition: bool = True, respect_start: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+def data(respect_start: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(daily, catalog) for the active database, cached until the DB file changes."""
     c = cfg()
     start = c.section("analysis").get("start_date") if respect_start else None
-    return _load(str(c.db_path), _db_mtime(c.db_path), mask_nutrition, start)
+    return _load(str(c.db_path), _db_mtime(c.db_path), start)
 
 
 @st.cache_data(show_spinner=False)
@@ -109,17 +109,8 @@ def label(metric: str, catalog: pd.DataFrame, with_unit: bool = True) -> str:
     return f"{base} ({unit})" if with_unit and unit and unit != "count" else base
 
 
-# -- optional module -----------------------------------------------------------
-
 def has_metric(daily: pd.DataFrame, name: str, min_days: int = 1) -> bool:
     return name in daily and daily[name].notna().sum() >= min_days
-
-
-def optional_module_notice(what: str, needs: str) -> None:
-    st.info(
-        f"**{what} is an optional module and your database doesn't have the data it needs.** "
-        f"It requires {needs}. Activity, gait and audio analyses on the other pages don't depend on it. "
-        "To see it working, run the synthetic demo: `healthlab demo`.", icon="ℹ️")
 
 
 BOTTOM_LEGEND = dict(orientation="h", yanchor="top", y=-0.12, x=0)

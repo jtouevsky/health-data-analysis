@@ -17,7 +17,7 @@ pages = [
     st.Page(HERE / "trends.py", title="Trends", icon="📈"),
     st.Page(HERE / "correlations.py", title="Correlation Scan", icon="🔗"),
     st.Page(HERE / "seasonal.py", title="Seasonal Comparison", icon="☀️"),
-    st.Page(HERE / "energy.py", title="Energy Balance", icon="⚖️"),
+    st.Page(HERE / "changepoints.py", title="Changepoints", icon="📍"),
     st.Page(HERE / "forecasts.py", title="Forecasts", icon="🔮"),
 ]
 

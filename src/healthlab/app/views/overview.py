@@ -52,15 +52,14 @@ if has_metric(daily, "steps"):
 
 # -- Module status ------------------------------------------------------------
 st.subheader("Modules")
-energy = cfg().section("nutrition").get("energy_metric", "intake_kcal")
-has_food = has_metric(daily, energy)
-has_weight = has_metric(daily, "weight_kg")
+n_overrides = len(cfg().timezone_overrides)
 st.markdown(
-    f"- **Activity, gait and audio analyses**: {'available' if len(analysable_metrics(daily, catalog)) else 'no data'}\n"
-    f"- **Nutrition logging**: {'available, ' + str(int(daily['well_logged'].sum())) + ' well-logged days' if has_food else 'not present in this export'}\n"
-    f"- **Body weight**: {'available, ' + str(int(daily['weight_kg'].notna().sum())) + ' days with weigh-ins' if has_weight else 'not present in this export'}\n"
-    f"- **Energy balance** (needs both): {'available' if has_food and has_weight else 'inactive'}\n"
-    f"- **Sleep**: {'present' if has_metric(daily, 'sleep_asleep_h') else 'no history yet'} (stored, not analysed until there's history)")
+    f"- **Activity, gait and audio analyses**: {len(analysable_metrics(daily, catalog))} metrics with enough data\n"
+    f"- **Time-zone override periods**: {n_overrides} configured"
+    + ("" if n_overrides else " (all local dates use the default zone; add travel periods under `time.overrides`)") + "\n"
+    f"- **Sleep**: {'present' if has_metric(daily, 'sleep_asleep_h') else 'no history yet'} (stored, not analysed until there's history)\n"
+    "- Any other HealthKit types in an export (e.g. nutrition, body weight) are still ingested and rolled up "
+    "generically, but have no dedicated analysis.")
 
 with st.expander("Metric catalog"):
     st.dataframe(catalog, hide_index=True, width="stretch")

@@ -2,7 +2,8 @@
 
 **Local-first statistical analysis of an Apple Health export**: streaming ingest into SQLite, a recomputable
 daily rollup with data-quality controls, and a Streamlit app for trends, a multiple-testing-corrected lagged
-correlation scan, seasonal comparisons, an energy-balance model and honestly-evaluated forecasts.
+correlation scan, seasonal comparisons, changepoint detection with life-event annotation, and
+honestly-evaluated forecasts.
 
 Every methodological judgment call is logged with its rationale in **[DECISIONS.md](DECISIONS.md)**.
 
@@ -21,31 +22,31 @@ pip install -e . && healthlab demo      # synthetic data end to end, opens the a
 
 | Planted effect | Truth | Recovered by the app |
 |---|---|---|
-| Steps today → walking speed **tomorrow** | lag 1, positive | Strongest at **lag 1**, ρ = 0.50 (lag 0: 0.14, lag 3: 0.04), q < 10⁻³⁰ |
-| Active energy today → food intake **in 2 days** | lag 2, positive | Strongest at **lag 2**, ρ = 0.42, q < 10⁻¹⁰ |
-| True TDEE | 2,140 kcal/d | **2,167** kcal/d after the 15% under-reporting adjustment. Naive estimate 1,848 (the bias is visible) |
-| Apple's active + basal estimate | 2,248 kcal/d | 2,244 kcal/d. Gap to empirical TDEE −396 kcal/d (95% CI −470 to −322), stable over time (drift p = 0.69) |
+| Steps today → walking speed **tomorrow** | lag 1, positive | Strongest at **lag 1**, ρ = 0.32 (lags 0/2/3: ≤ 0.06), q ≈ 10⁻¹² |
+| Flights climbed today → walking asymmetry **in 2 days** | lag 2, positive | Strongest at **lag 2**, ρ = 0.38 (other lags ≤ 0.06), q ≈ 10⁻¹⁷ |
+| 20 regime shifts across 6 metrics (summers, a −30% car commute, a 6-week injury, a phone upgrade that changes *measured* gait) | dates | **All 20 found** by PELT at the BIC penalty: 12 in the exact week, 6 within 2–4 days, 2 twenty days late. 22 of 24 detections match a known life, device or travel event. BOCPD independently agrees |
+| Commute regime | −30% steps | −27% median steps after the changepoint, block-bootstrap CI excludes 0, Cliff's δ = −0.64 |
 | Summers lived in Sofia time | daily totals | Exact with the `Europe/Sofia` override (median error < 1%). Without it, summer days are wrong by 8% (median) and > 20% on many days |
-| Summers in Bulgaria: +35% steps | +35% | Median +2,312 steps/day, 7-day block-bootstrap 95% CI [1,448, 3,064], Cliff's δ = 0.47 |
-| Logging coverage | ~70% of days complete | 67% flagged well-logged, 14% partial. Unlogged days are missing, never zero |
-| Duplicate energy from a second app | must not double count | Source priority keeps one source per day (mean active energy within 4% of truth) |
+| Summers in Bulgaria vs school year | +35% steps (plus the commute) | Median +2,480 steps/day, 7-day block-bootstrap 95% CI [1,592, 3,451], Cliff's δ = 0.58 |
+| A partner's phone writing steps on days the demo phone has no data | must be excluded | `source_exclude` removes it, so those days stay missing instead of showing someone else's steps |
+| Duplicate energy from a second app | must not double count | Source priority keeps one source per day (mean active energy within 3% of truth) |
 
 Methodological checks the demo makes visible:
 
-- **Detrending matters.** On raw daily series the same scan "discovers" 266 of 735 tests. After rolling-median
-  detrending and the effective-n correction, it finds 114, and the planted effects stay at the top.
-- **If you believed both the food log and Apple's expenditure**, the predicted weight path would diverge from
-  the real one by about 384 kcal/day. With ±8% uncertainty in Apple's estimate compounded over 18 months, the
-  plausible band spans ±13 kg. Small systematic errors dominate long-run energy-balance predictions.
-- **Forecasts versus baselines** (12 weekly folds): SARIMAX beats seasonal-naive by 19% MAE on daily steps and
-  beats naive by 25% on the weight trend. Gradient boosting helps for steps, but is **worse than naive** on the
-  weight trend, because trees can't extrapolate a trend. The app reports that rather than hiding it.
+- **Detrending matters.** On raw daily series the same scan "discovers" 112 of 315 tests. After rolling-median
+  detrending and the effective-n correction, it finds 31, and both planted effects are at the top.
+- **Autocorrelation and changepoints.** On 300 days of pure AR(1) noise (φ = 0.7), BIC segmentation scaled by
+  the ordinary noise SD finds ~8 spurious changepoints per series. Scaling by the long-run SD cuts that to ~2
+  (unit-tested). Shrinking φ to its lower confidence bound keeps short weekly series from losing real shifts.
+- **Forecasts versus baselines** (12 weekly folds): SARIMAX beats seasonal-naive by 12% MAE on daily steps
+  (better in 9/12 folds) and by 26% on walking speed (11/12). Gradient boosting barely beats the baseline for
+  steps (+3%, 6/12 folds), and the app says so.
 
 | | |
 |---|---|
 | ![Overview](docs/screenshots/overview.jpg) | ![Correlation scan](docs/screenshots/correlation_scan.jpg) |
-| ![Energy balance](docs/screenshots/energy_tdee.jpg) | ![Expected vs actual weight](docs/screenshots/energy_trajectory.jpg) |
-| ![Seasonal comparison](docs/screenshots/seasonal.jpg) | ![Forecasts](docs/screenshots/forecasts.jpg) |
+| ![Changepoints](docs/screenshots/changepoints.jpg) | ![Seasonal comparison](docs/screenshots/seasonal.jpg) |
+| ![Forecasts](docs/screenshots/forecasts.jpg) | |
 
 *All screenshots show synthetic demo data.*
 
@@ -81,9 +82,10 @@ your machine, and `.gitignore` keeps it out of version control. Real results are
 - Per-day source priority stops iPhone + app double counting.
 - No data means NaN, not 0. The exception is event-style counts on days the phone was demonstrably carried.
 
-**Nutrition coverage** (N1–N4)
-- `well_logged` = ≥ 3 entries and 1,200–5,000 kcal. Every nutrition analysis is masked to well-logged days
-  at a single choke point, `load_daily()`.
+**Sources & devices** (R3a, R3b)
+- Specific sources (e.g. a family member's phone) can be excluded in config, globally or per type.
+- The Data Quality page shows each source's active date range and the hardware models parsed from Apple's
+  device strings, so you can verify which sources are yours.
 
 **Correlation scan** ([`correlations.py`](src/healthlab/analysis/correlations.py), C1–C11)
 - Spearman ρ for all metric pairs at lags 0–3, run on detrended series (residual from a 28-day rolling median)
@@ -100,12 +102,15 @@ your machine, and `.gitignore` keeps it out of version control. Real results are
   honest under autocorrelation.
 - A weekly-unit sensitivity check and an explicit confounds panel complete the page.
 
-**Energy balance** ([`energy.py`](src/healthlab/analysis/energy.py), E1–E9)
-- TDEE = mean well-logged intake − weight slope × 7,700 kcal/kg over 28-day windows. The weight slope defaults
-  to a window OLS fit; the EWMA-trend difference is an option.
-- CIs propagate both intake and slope uncertainty, and summaries use non-overlapping windows only.
-- The page compares the result with Apple's estimate (gap, SD, drift test), runs a Monte Carlo expected-weight
-  trajectory, and includes an under-reporting sensitivity slider and discussion.
+**Changepoints** ([`changepoints.py`](src/healthlab/analysis/changepoints.py), K1–K12)
+- Weekly means (steps and distance on a log scale) of steps, distance and four walking metrics are standardised
+  by a robust long-run noise SD (AR(1) from first differences, φ shrunk to its lower 95% bound) and winsorised.
+- They're segmented with **PELT** (`ruptures`) under a **BIC penalty** of 2·log n, with a sensitivity sweep
+  (0.25×–8×) and per-changepoint stability.
+- **Bayesian online changepoint detection** (Adams & MacKay) runs as an independent comparison.
+- Before/after effect sizes on daily values come with block-bootstrap CIs.
+- Changepoints are matched to configured **life events**, **device changes** (new hardware or a major iOS
+  version) and **travel periods**.
 
 **Forecasting** ([`forecast.py`](src/healthlab/analysis/forecast.py), F1–F7)
 - Naive and seasonal-naive baselines compete with SARIMAX(1,0,1)(1,0,1,7) and a direct multi-horizon
@@ -153,8 +158,12 @@ the daily table after you change aggregation rules or thresholds in `config/heal
 pytest
 ```
 
-85 tests cover parsing, timezone edge cases, duplicate imports, aggregation rules, logging coverage,
-BH correction, the stats primitives, the forecasting leakage guard, and the synthetic end-to-end run (~10 s).
+94 tests cover:
+- parsing, timezone edge cases (including override periods) and duplicate imports;
+- aggregation rules and source exclusion;
+- BH correction and the stats primitives;
+- the changepoint estimators and the forecasting leakage guard;
+- the synthetic end-to-end run, which checks recovery of every planted effect (~30 s).
 
 ### Configure your travel periods
 
@@ -162,6 +171,15 @@ Add each stay abroad to `config/healthlab.yaml` → `time.overrides`, for exampl
 `{start: "2025-06-18", end: "2025-08-28", timezone: Europe/Sofia, label: bulgaria_summer}`, then run
 `healthlab rollup`. The label also makes it a period on the Seasonal page; add `school_year` ranges under
 `seasonal.periods`. Until two periods exist, the Seasonal page compares calendar months.
+
+### Annotate changepoints with life events
+
+Add `{date: "2024-09-01", label: "Started university"}` entries under `changepoints.life_events`. Device changes
+(new phone, major iOS update) and travel periods are added automatically.
+
+### Exclude sources that aren't yours
+
+List them under `source_exclude.all` (or per HealthKit type), then run `healthlab rollup`.
 
 ### Privacy
 
@@ -183,8 +201,8 @@ process automatically.
 config/healthlab.yaml          all parameters (aggregation rules, thresholds, periods, model settings)
 src/healthlab/
   ingest.py  rollup.py  quality.py  units.py  timeutil.py  db.py  config.py  cli.py  synth.py
-  analysis/  correlations.py  seasonal.py  energy.py  forecast.py  stats.py  trend.py
-  app/       main.py  common.py  views/{overview,data_quality,trends,correlations,seasonal,energy,forecasts}.py
+  analysis/  correlations.py  seasonal.py  changepoints.py  forecast.py  stats.py  trend.py
+  app/       main.py  common.py  views/{overview,data_quality,trends,correlations,seasonal,changepoints,forecasts}.py
 tests/                         unit + end-to-end tests
 DECISIONS.md                   every methodology assumption, with rationale
 ```
