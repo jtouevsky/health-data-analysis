@@ -91,6 +91,24 @@ class Config:
         return [ZoneOverride(start=date.fromisoformat(str(o["start"])), end=date.fromisoformat(str(o["end"])),
                              timezone=o["timezone"], label=o.get("label")) for o in (src or [])]
 
+    @property
+    def source_exclusions(self) -> tuple[set[str], dict[str, set[str]]]:
+        """(sources excluded for all types, {HK type: excluded sources}), normalised names.
+
+        Uses ``demo.source_exclude`` in demo mode, ``source_exclude`` otherwise.
+        """
+        src = (self.raw.get("demo") or {}).get("source_exclude") if self.demo_mode else self.raw.get("source_exclude")
+        src = dict(src or {})
+        everywhere = {normalize_source(s) for s in (src.pop("all", None) or [])}
+        per_type = {t: {normalize_source(s) for s in (v or [])} for t, v in src.items()}
+        return everywhere, per_type
+
+    def is_excluded(self, source: str | None, hk_type: str | None = None) -> bool:
+        """True if a source is excluded (for this type, if given)."""
+        everywhere, per_type = self.source_exclusions
+        n = normalize_source(source)
+        return n in everywhere or (hk_type is not None and n in per_type.get(hk_type, set()))
+
     def zone_resolver(self) -> ZoneResolver:
         """Resolver mapping instants to the zone that defines their local date."""
         return ZoneResolver(self.timezone, self.timezone_overrides, self.local_date_mode)
@@ -125,6 +143,11 @@ class Config:
             return MetricRule(hk_type, name, d["category_agg"], "count", "other", name, None, False)
         agg = d["cumulative_agg"] if unit in set(d["cumulative_units"]) else d["sample_agg"]
         return MetricRule(hk_type, name, agg, unit, "other", name, None, False)
+
+
+def normalize_source(name: str | None) -> str:
+    """Comparable source name: stripped, case-folded, curly apostrophes made straight."""
+    return (name or "").strip().replace("\u2019", "'").replace("\u2018", "'").casefold()
 
 
 def short_name(hk_type: str) -> str:

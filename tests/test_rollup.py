@@ -135,3 +135,30 @@ def test_partial_export_day_dropped(tmp_path, cfg):
     d, _ = build(tmp_path, cfg, body)
     assert d.index.max() == pd.Timestamp("2026-10-04")
     assert d.loc["2026-10-04", "steps"] == pytest.approx(200)  # 100 + half of the spanning sample
+
+
+def test_excluded_sources_are_ignored(tmp_path, cfg):
+    cfg.raw["source_exclude"] = {"all": ["Guest's iPhone"],     # straight apostrophe in config...
+                                 ACTIVE: ["App"]}
+    body = (rec(STEPS, 100, "2024-05-01 10:00:00 -0700", source="Phone")
+            + rec(STEPS, 999, "2024-05-02 10:00:00 -0700", source="Guest’s iPhone")   # ...curly in data
+            + rec(ACTIVE, 300, "2024-05-01 10:00:00 -0700", unit="kcal", source="App")
+            + rec(STEPS, 50, "2024-05-03 10:00:00 -0700", source="App"))
+    d, con = build(tmp_path, cfg, body)
+    assert np.isnan(d.loc["2024-05-02", "steps"])           # foreign phone's day is missing, not 999
+    assert "active_kcal" not in d.columns                   # App excluded for active energy only
+    assert d.loc["2024-05-03", "steps"] == 50               # ...but still used for steps
+    assert con.execute("SELECT COUNT(*) FROM records").fetchone()[0] == 4   # raw data untouched
+
+
+def test_source_summary_reports_ranges_and_status(tmp_path, cfg):
+    from healthlab.quality import source_summary
+
+    cfg.raw["source_exclude"] = {"all": ["Old iPod"]}
+    body = (rec(STEPS, 100, "2024-05-01 10:00:00 -0700", source="Phone")
+            + rec(STEPS, 100, "2024-06-01 10:00:00 -0700", source="Phone")
+            + rec(STEPS, 100, "2023-01-01 10:00:00 -0800", source="Old iPod"))
+    _, con = build(tmp_path, cfg, body)
+    s = source_summary(con, cfg).set_index("source_name")
+    assert s.loc["Phone", "first_date"] == "2024-05-01" and s.loc["Phone", "last_date"] == "2024-06-01"
+    assert s.loc["Phone", "status"] == "included" and s.loc["Old iPod", "status"] == "excluded"

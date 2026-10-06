@@ -24,6 +24,10 @@ Planted structure (all parameters in :data:`TRUTH_PARAMS`):
 * **Source overlap**: a second app duplicates some active-energy samples, so source
   dedup is exercised.
 * **Sleep**: only the last 14 days (tracking "just enabled").
+* **Devices**: the phone reports hardware ``iPhone12,1`` and is upgraded to
+  ``iPhone15,2`` on day ``phone_upgrade_day``. A foreign "Partner's iPhone" writes
+  steps on some days, including days the demo phone has no data; demo mode
+  excludes it via ``demo.source_exclude``.
 """
 
 from __future__ import annotations
@@ -65,7 +69,16 @@ TRUTH_PARAMS = {
     "logging_stay_on": 0.88, "logging_stay_off": 0.6, "partial_share": 0.12,
     "weight_start_kg": 84.0, "weight_noise_sd": 0.45, "weigh_in_prob": 5 / 7,
     "missing_phone_day_prob": 0.03,
+    "phone_upgrade_day": 300, "hardware_before": "iPhone12,1", "hardware_after": "iPhone15,2",
+    "partner_extra_day_prob": 0.05,
 }
+PARTNER = "Partner's iPhone"
+
+
+def _device(hardware: str, software: str) -> str:
+    """An HKDevice description string in Apple's export format."""
+    return (f"<<HKDevice: 0x7d153ce6a0>, name:iPhone, manufacturer:Apple Inc., model:iPhone, "
+            f"hardware:{hardware}, software:{software}, creation date:2025-01-01 12:00:00 +0000>")
 
 
 @dataclass
@@ -76,6 +89,7 @@ class _Writer:
     lines: list[str]
     n: int = 0
     blocked: "Callable[[datetime], bool] | None" = None   # drop samples starting in these instants
+    device: str | None = None                              # HKDevice string for the demo phone's records
 
     def ts(self, dt_utc: datetime, offset: timezone | None = None) -> str:
         d = dt_utc.astimezone(offset or self.render_offset)
@@ -86,6 +100,10 @@ class _Writer:
         if self.blocked is not None and self.blocked(start):
             return
         a = {"type": type_, "sourceName": source, "sourceVersion": "17.5"}
+        if source == PHONE and self.device:
+            a["device"] = self.device
+        elif source == PARTNER:
+            a["device"] = _device("iPhone13,2", "17.4")
         if unit is not None:
             a["unit"] = unit
         a.update({"creationDate": self.ts(end, offset), "startDate": self.ts(start, offset),
@@ -197,6 +215,14 @@ def write_synthetic_export(out: str | Path, cfg: Config, days: int | None = None
         r = lat.iloc[i]
         # LA-lived days lose samples that fall inside an override window (departure afternoon).
         w.blocked = None if r.summer else in_override
+        upgraded = i >= P["phone_upgrade_day"]
+        w.device = _device(P["hardware_after"] if upgraded else P["hardware_before"], "18.1" if upgraded else "17.5")
+        if r.phone_missing or rng.uniform() < P["partner_extra_day_prob"]:
+            # Someone else's phone: must be excluded, or it fills our missing days with their steps.
+            for hr in rng.choice(np.arange(8, 22), size=8):
+                st_ = at(day, hr + rng.uniform(0, 0.6))
+                w.record(Q + "StepCount", max(1, round(rng.normal(1400, 300))), st_, st_ + timedelta(minutes=10),
+                         unit="count", source=PARTNER)
         # A few records per summer day are rendered as if exported from Bulgaria (+0300):
         # same instant, different text. Exercises offset parsing and hash dedup.
         odd_offset = sofia_render if (r.summer and i % 9 == 0) else None

@@ -81,6 +81,13 @@ default_rules:
 rollup:
   zero_fill_anchor: steps   # 'phone was carried' signal for zero_fill metrics
 
+# Sources to ignore in all rollups and analyses (records stay in the database).
+# Matching ignores case and treats ’ and ' alike. Check the "Sources & devices"
+# section of the Data Quality page to see which devices are yours.
+source_exclude:
+  all: []                  # e.g. ["Another Person's iPhone"]
+  # HKQuantityTypeIdentifierStepCount: ["Old iPod touch"]
+
 source_priority:
   default: []           # e.g. ["Someone's iPhone"]
   # HKQuantityTypeIdentifierActiveEnergyBurned: ["iPhone", "MyFitnessPal"]
@@ -167,6 +174,8 @@ forecast:
   seed: 0
 
 demo:
+  source_exclude:
+    all: ["Partner's iPhone"]   # a synthetic foreign device (see synth.py)
   start_date: "2025-04-01"
   days: 548
   seed: 2024

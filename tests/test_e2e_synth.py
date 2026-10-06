@@ -159,3 +159,28 @@ def test_timezone_overrides_put_summer_samples_on_the_right_day(demo):
     # neighbouring days have similar totals, so the error is moderate but systematic.
     assert rel_err_no.median() > 0.04 and rel_err_no.median() > 5 * rel_err.median()
     assert (rel_err_no > 0.2).mean() > 0.15
+
+
+def test_foreign_source_excluded_and_device_upgrade_visible(demo):
+    from healthlab.quality import hardware_timeline, source_summary
+    from healthlab.rollup import build_daily, load_records
+
+    con, cfg, t = demo["con"], demo["cfg"], demo["truth"]
+    used = {r[0] for r in con.execute("SELECT DISTINCT source_used FROM daily_sources")}
+    assert "Partner's iPhone" not in used
+    missing = [d for d, v in t["daily_steps"].items() if v is None and d not in t["travel_days"]]
+    assert len(missing) > 5
+    assert demo["raw"]["steps"].reindex(pd.to_datetime(missing)).isna().all()
+    # Without the exclusion, the partner's steps would fill those days.
+    cfg_inc = load_config(demo_mode=True)
+    cfg_inc.raw["demo"]["source_exclude"] = {"all": []}
+    d_inc, _, _ = build_daily(load_records(con, cfg_inc), cfg_inc)
+    assert d_inc["steps"].reindex(pd.to_datetime(missing)).notna().all()
+
+    s = source_summary(con, cfg).set_index("source_name")
+    assert s.loc["Partner's iPhone", "status"] == "excluded"
+    hw = hardware_timeline(con)
+    phone = hw[hw["source_name"] == "Demo iPhone"]
+    assert phone["hardware"].tolist() == ["iPhone12,1", "iPhone15,2"]
+    upgrade = pd.Timestamp(t["start_date"]) + pd.Timedelta(days=t["params"]["phone_upgrade_day"])
+    assert abs((pd.Timestamp(phone["first_date"].iloc[1]) - upgrade).days) <= 1

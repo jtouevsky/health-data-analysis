@@ -141,3 +141,66 @@ def activity_timing(con: sqlite3.Connection, cfg: Config, hk_type: str = "HKQuan
     m = g.pivot_table(index="month", columns="hour", values="value", aggfunc="sum", fill_value=0.0)
     m = m[m.sum(axis=1) >= min_total]
     return m.div(m.sum(axis=1), axis=0)
+
+
+# ---------------------------------------------------------------------------
+# Sources & devices
+# ---------------------------------------------------------------------------
+
+def _device_field(field: str) -> str:
+    """SQL expression extracting ``field:<value>`` from Apple's HKDevice description string.
+
+    Fields are separated by ", " (values such as ``iPhone15,2`` contain a bare comma).
+    """
+    tag = f"{field}:"
+    rest = f"substr(device, instr(device, '{tag}') + {len(tag)})"
+    return f"CASE WHEN instr(device, '{tag}') > 0 THEN trim(substr({rest}, 1, instr({rest} || ', ', ', ') - 1)) END"
+
+
+def source_summary(con: sqlite3.Connection, cfg: Config) -> pd.DataFrame:
+    """One row per source: activity date range, volume, types written, hardware and exclusion status.
+
+    Lets the owner verify which sources are their own devices before trusting
+    (or excluding) them. Dates are the ingest-time local dates.
+    """
+    df = pd.read_sql_query(
+        f"""SELECT source_name, COUNT(*) AS n_records, MIN(local_date) AS first_date, MAX(local_date) AS last_date,
+                   COUNT(DISTINCT local_date) AS active_days, COUNT(DISTINCT type) AS n_types
+            FROM records GROUP BY source_name""", con)
+    hw = hardware_timeline(con).groupby("source_name", sort=False)["hardware"].apply(lambda s: " → ".join(s))
+    df["hardware"] = df["source_name"].map(hw)
+    types = pd.read_sql_query("SELECT DISTINCT source_name, type FROM records", con)
+    from .config import short_name
+
+    names = types.assign(t=types["type"].map(short_name)).groupby("source_name")["t"].apply(lambda s: ", ".join(sorted(s)))
+    df["types"] = df["source_name"].map(names)
+    everywhere, per_type = cfg.source_exclusions
+
+    def status(src: str) -> str:
+        if cfg.is_excluded(src):
+            return "excluded"
+        partial = [t for t in types.loc[types["source_name"] == src, "type"] if cfg.is_excluded(src, t)]
+        return f"excluded for {len(partial)} type(s)" if partial else "included"
+
+    df["status"] = df["source_name"].map(status)
+    df["span_days"] = (pd.to_datetime(df["last_date"]) - pd.to_datetime(df["first_date"])).dt.days + 1
+    return df.sort_values("first_date").reset_index(drop=True)[
+        ["source_name", "status", "first_date", "last_date", "span_days", "active_days", "n_records",
+         "hardware", "n_types", "types"]]
+
+
+def source_monthly(con: sqlite3.Connection) -> pd.DataFrame:
+    """Records per source per month (long format) for the activity timeline."""
+    df = pd.read_sql_query(
+        "SELECT source_name, substr(local_date, 1, 7) AS month, COUNT(*) AS n FROM records GROUP BY 1, 2", con)
+    df["month"] = pd.to_datetime(df["month"] + "-01")
+    return df
+
+
+def hardware_timeline(con: sqlite3.Connection) -> pd.DataFrame:
+    """First/last date each (source, hardware model) was seen: phone upgrades show up here."""
+    df = pd.read_sql_query(
+        f"""SELECT source_name, {_device_field('hardware')} AS hardware, MIN(local_date) AS first_date,
+                   MAX(local_date) AS last_date, COUNT(*) AS n_records
+            FROM records WHERE device IS NOT NULL GROUP BY 1, 2 ORDER BY 3""", con)
+    return df.dropna(subset=["hardware"])

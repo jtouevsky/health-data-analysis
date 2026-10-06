@@ -7,8 +7,9 @@ import streamlit as st
 
 from healthlab.app.common import (SEQ_BLUE, SERIES, MUTED, cfg, connection, data, label, require_data,
                                   style, to_display)
-from healthlab.quality import (activity_timing, coverage_matrix, gap_summary, logging_summary,
-                               outlier_table, source_breakdown)
+from healthlab.quality import (activity_timing, coverage_matrix, gap_summary, hardware_timeline,
+                               logging_summary, outlier_table, source_breakdown, source_monthly,
+                               source_summary)
 
 st.title("Data Quality")
 require_data()
@@ -52,13 +53,47 @@ st.caption(f"Runs of ≥ {min_days} consecutive missing days between a metric's 
 st.dataframe(gaps.assign(start=gaps["start"].dt.date, end=gaps["end"].dt.date), hide_index=True,
              width="stretch", height=260)
 
-# -- Sources ----------------------------------------------------------------------------
-st.subheader("Sources per type")
+# -- Sources & devices ---------------------------------------------------------------------
+st.subheader("Sources & devices")
 con = connection()
-src = source_breakdown(con)
-st.caption("For each type and day, only the highest-priority source with data is used (see DECISIONS.md R3). "
-           "`days_overridden` counts days where this source had data but a higher-priority source won.")
-st.dataframe(src, hide_index=True, width="stretch")
+summ = source_summary(con, c)
+st.caption("Every app or device that wrote data, with when it was active and which hardware it reported. "
+           "Use this to check which sources are yours. To ignore one (e.g. a family member's phone), add it "
+           "to `source_exclude` in `config/healthlab.yaml` and run `healthlab rollup`.")
+st.dataframe(summ, hide_index=True, width="stretch", column_config={
+    "span_days": st.column_config.NumberColumn("span (days)"),
+    "active_days": st.column_config.NumberColumn("days with data"),
+    "hardware": st.column_config.TextColumn("hardware (in order seen)"),
+})
+monthly = source_monthly(con)
+order = summ["source_name"].tolist()
+status = dict(zip(summ["source_name"], summ["status"]))
+fig = go.Figure()
+for i, srcname in enumerate(order):
+    row = summ.iloc[i]
+    excluded = status[srcname] == "excluded"
+    col = MUTED if excluded else SERIES[i % len(SERIES)]
+    fig.add_scatter(x=[row["first_date"], row["last_date"]], y=[srcname, srcname], mode="lines",
+                    line=dict(color=col, width=2), showlegend=False, hoverinfo="skip")
+    m = monthly[monthly["source_name"] == srcname]
+    fig.add_scatter(x=m["month"], y=[srcname] * len(m), mode="markers", showlegend=False,
+                    marker=dict(size=np.clip(3 + 2.2 * np.log10(m["n"].to_numpy() + 1), 4, 14), color=col,
+                                symbol="x" if excluded else "circle"),
+                    customdata=m["n"], hovertemplate="%{y}<br>%{x|%b %Y}: %{customdata:,} records<extra></extra>")
+fig.update_yaxes(categoryorder="array", categoryarray=order[::-1])
+st.plotly_chart(style(fig, height=110 + 45 * len(order), title="Active months per source (marker size = record volume; × = excluded)",
+                      hovermode="closest"), width="stretch")
+hw = hardware_timeline(con)
+if not hw.empty:
+    st.markdown("**Hardware reported per source.** A new model on your own source usually means a phone upgrade, "
+                "which can shift gait metrics. These dates appear as device events on the Changepoints page.")
+    st.dataframe(hw, hide_index=True, width="stretch")
+with st.expander("Per-type source breakdown and dedup"):
+    src = source_breakdown(con)
+    st.caption("For each type and day, only the highest-priority source with data is used (see DECISIONS.md R3). "
+               "`days_overridden` counts days where this source had data but a higher-priority source won. "
+               "Excluded sources show 0 selected days.")
+    st.dataframe(src, hide_index=True, width="stretch")
 
 # -- Outliers ----------------------------------------------------------------------------
 st.subheader("Outlier flags")

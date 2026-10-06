@@ -65,7 +65,20 @@ def load_records(con: sqlite3.Connection, cfg: Config) -> pd.DataFrame:
     df["local_date"] = df["local_start"].dt.strftime("%Y-%m-%d")
     df["local_end_date"] = df["local_end"].dt.strftime("%Y-%m-%d")
     df["source_name"] = df["source_name"].fillna("(unknown)")
-    return df
+    return drop_excluded_sources(df, cfg)
+
+
+def drop_excluded_sources(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """Remove records from sources excluded in config (globally or for their type)."""
+    everywhere, per_type = cfg.source_exclusions
+    if not everywhere and not per_type:
+        return df
+    pairs = df[["type", "source_name"]].drop_duplicates()
+    bad = {(t, s) for t, s in pairs.itertuples(index=False) if cfg.is_excluded(s, t)}
+    if not bad:
+        return df
+    key = pd.MultiIndex.from_frame(df[["type", "source_name"]])
+    return df[~key.isin(list(bad))]
 
 
 # ---------------------------------------------------------------------------
