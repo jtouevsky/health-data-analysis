@@ -125,3 +125,13 @@ def test_rollup_is_recomputable(tmp_path, cfg):
     d2 = rebuild_daily(cfg, con=con)
     pd.testing.assert_frame_equal(d1, d2)
     assert load_daily(con).shape[0] == 1
+
+
+def test_partial_export_day_dropped(tmp_path, cfg):
+    # xmlfactory's ExportDate is 2026-10-05 16:13 -0700 -> local day 2026-10-05 is partial.
+    body = (rec(STEPS, 100, "2026-10-04 12:00:00 -0700")
+            + rec(STEPS, 200, "2026-10-04 23:00:00 -0700", "2026-10-05 01:00:00 -0700")
+            + rec(STEPS, 300, "2026-10-05 09:00:00 -0700"))
+    d, _ = build(tmp_path, cfg, body)
+    assert d.index.max() == pd.Timestamp("2026-10-04")
+    assert d.loc["2026-10-04", "steps"] == pytest.approx(200)  # 100 + half of the spanning sample

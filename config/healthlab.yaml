@@ -151,7 +151,7 @@ energy:
 
 forecast:
   horizon_days: 7
-  n_splits: 8
+  n_splits: 12
   max_train_days: 730
   sarimax_order: [1, 0, 1]
   sarimax_seasonal_order: [1, 0, 1, 7]

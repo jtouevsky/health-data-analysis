@@ -289,14 +289,35 @@ def add_nutrition_coverage(daily: pd.DataFrame, sources: pd.DataFrame, cfg: Conf
     return daily
 
 
+def export_cutoff(con: sqlite3.Connection, cfg: Config) -> pd.Timestamp | None:
+    """Local date of the most recent export: that day (and anything later) is incomplete."""
+    row = con.execute("SELECT MAX(export_date) FROM import_runs WHERE status='ok'").fetchone()
+    if not row or not row[0]:
+        return None
+    ts = pd.Timestamp(row[0], tz="UTC")
+    local = ts.tz_convert(cfg.timezone) if cfg.local_date_mode == "zone" else ts
+    return local.tz_localize(None).normalize()
+
+
 def rebuild_daily(cfg: Config, db_path: str | Path | None = None,
                   con: sqlite3.Connection | None = None) -> pd.DataFrame:
-    """Recompute ``daily``, ``metric_catalog`` and ``daily_sources`` from raw records."""
+    """Recompute ``daily``, ``metric_catalog`` and ``daily_sources`` from raw records.
+
+    The export day itself is dropped: it was exported mid-day, so its totals are
+    partial and would look like an outlier (and poison naive forecasts).
+    """
     own = con is None
     con = con or connect(db_path or cfg.db_path)
     try:
         records = load_records(con, cfg)
+        cutoff = export_cutoff(con, cfg)
+        if cutoff is not None and not records.empty:
+            records = records[records["local_start"] < cutoff]
         daily, catalog, sources = build_daily(records, cfg) if not records.empty else (pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+        if cutoff is not None and not daily.empty:
+            # Samples spanning midnight can prorate into the cutoff day; drop it entirely.
+            daily = daily[daily.index < cutoff]
+            sources = sources[sources["date"] < cutoff] if not sources.empty else sources
         out = daily.copy()
         if not out.empty:
             out.index = out.index.strftime("%Y-%m-%d")
