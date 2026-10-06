@@ -8,9 +8,11 @@ derived from real data.
 Planted structure (all parameters in :data:`TRUTH_PARAMS`):
 
 * **Weekly seasonality** in steps (Saturday high, Sunday low).
-* **Summers in Bulgaria** (``demo.periods.bulgaria_summer``): +35 % steps, a
-  holiday energy surplus, and an activity rhythm shifted to Sofia hours (visible
-  on the Data Quality activity-timing heatmap).
+* **Summers in Bulgaria** (``demo.timezone_overrides``): +35 % steps and a
+  holiday energy surplus. Those days are lived in Europe/Sofia local time, so the
+  configured time-zone override is needed to put each sample on the right day.
+  Samples of LA days that fall inside an override window (the departure
+  afternoon) are dropped, mimicking a travel day.
 * **Lag-1 effect**: steps on day t raise walking speed on day t+1.
 * **Lag-2 effect**: active energy on day t raises energy intake on day t+2.
 * **Energy balance**: weight follows true intake − true TDEE at 7,700 kcal/kg
@@ -29,7 +31,8 @@ from __future__ import annotations
 import json
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from typing import Callable
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 from zoneinfo import ZoneInfo
@@ -38,6 +41,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
+from .timeutil import ZoneOverride
 
 Q = "HKQuantityTypeIdentifier"
 PHONE = "Demo iPhone"
@@ -71,6 +75,7 @@ class _Writer:
     render_offset: timezone
     lines: list[str]
     n: int = 0
+    blocked: "Callable[[datetime], bool] | None" = None   # drop samples starting in these instants
 
     def ts(self, dt_utc: datetime, offset: timezone | None = None) -> str:
         d = dt_utc.astimezone(offset or self.render_offset)
@@ -78,6 +83,8 @@ class _Writer:
 
     def record(self, type_: str, value, start: datetime, end: datetime, *, unit: str | None, source: str = PHONE,
                meta: dict | None = None, offset: timezone | None = None) -> None:
+        if self.blocked is not None and self.blocked(start):
+            return
         a = {"type": type_, "sourceName": source, "sourceVersion": "17.5"}
         if unit is not None:
             a["unit"] = unit
@@ -140,14 +147,10 @@ def _latent(days: pd.DatetimeIndex, summer: np.ndarray, rng: np.random.Generator
     }, index=days)
 
 
-def _hour_weights(summer: bool) -> np.ndarray:
-    """Share of the day's activity per LA-local hour (Sofia-hours rhythm in summer)."""
+def _hour_weights() -> np.ndarray:
+    """Share of the day's activity per *local* hour (awake ~07:00-23:00, peak mid-afternoon)."""
     h = np.arange(24)
-    if summer:
-        # Awake ~09:00-24:00 Sofia = 23:00(prev)-14:00 LA; kept inside the LA day.
-        w = np.exp(-0.5 * ((h - 7) / 3.5) ** 2) * (h <= 14)
-    else:
-        w = np.exp(-0.5 * ((h - 14) / 4.0) ** 2) * (h >= 7)
+    w = np.exp(-0.5 * ((h - 14) / 4.0) ** 2) * (h >= 7)
     return w / w.sum()
 
 
@@ -161,9 +164,22 @@ def write_synthetic_export(out: str | Path, cfg: Config, days: int | None = None
     start = pd.Timestamp(demo.get("start_date", "2025-04-01"))
     idx = pd.date_range(start, periods=days, freq="D")
 
+    overrides = [ZoneOverride(date.fromisoformat(str(o["start"])), date.fromisoformat(str(o["end"])),
+                              o["timezone"], o.get("label")) for o in (demo.get("timezone_overrides") or [])]
+    day_zone = {d: tz for d in idx}
     summer = np.zeros(days, dtype=bool)
-    for s, e in (demo.get("periods") or {}).get("bulgaria_summer", []):
-        summer |= (idx >= pd.Timestamp(s)) & (idx <= pd.Timestamp(e))
+    travel_days: set[pd.Timestamp] = set()
+    for o in overrides:
+        m = (idx >= pd.Timestamp(o.start)) & (idx <= pd.Timestamp(o.end))
+        summer |= m
+        for d in idx[m]:
+            day_zone[d] = ZoneInfo(o.timezone)
+        for d in (o.start - timedelta(days=1), o.start, o.end, o.end + timedelta(days=1)):
+            travel_days.add(pd.Timestamp(d))
+
+    def in_override(u: datetime) -> bool:
+        return any(o.start_utc <= u < o.end_utc for o in overrides)
+
     lat = _latent(idx, summer, rng)
 
     apple_offset = timezone(timedelta(hours=-7))       # Apple renders everything in the export-time offset
@@ -172,16 +188,20 @@ def write_synthetic_export(out: str | Path, cfg: Config, days: int | None = None
     P = TRUTH_PARAMS
 
     def at(day: pd.Timestamp, hour: float) -> datetime:
-        local = datetime(day.year, day.month, day.day, tzinfo=tz) + timedelta(hours=hour)
+        """UTC instant of a local hour on a day, in the zone that day is lived in."""
+        zone = day_zone.get(pd.Timestamp(day.date()), tz)
+        local = datetime(day.year, day.month, day.day, tzinfo=zone) + timedelta(hours=hour)
         return local.astimezone(timezone.utc)
 
     for i, day in enumerate(idx):
         r = lat.iloc[i]
+        # LA-lived days lose samples that fall inside an override window (departure afternoon).
+        w.blocked = None if r.summer else in_override
         # A few records per summer day are rendered as if exported from Bulgaria (+0300):
         # same instant, different text. Exercises offset parsing and hash dedup.
         odd_offset = sofia_render if (r.summer and i % 9 == 0) else None
         if not r.phone_missing:
-            hw = _hour_weights(bool(r.summer))
+            hw = _hour_weights()
             hours = rng.choice(24, size=12, p=hw)
             shares = rng.dirichlet(np.ones(12))
             for k, (hr, sh) in enumerate(zip(hours, shares)):
@@ -283,7 +303,10 @@ def write_synthetic_export(out: str | Path, cfg: Config, days: int | None = None
             {"x": "steps", "y": "walking_speed_kmh", "lag": 1, "sign": 1},
             {"x": "active_kcal", "y": "intake_kcal", "lag": 2, "sign": 1},
         ],
-        "summer_periods": (demo.get("periods") or {}).get("bulgaria_summer", []),
+        "summer_periods": [[o.start.isoformat(), o.end.isoformat()] for o in overrides],
+        "travel_days": sorted(str(d.date()) for d in travel_days),
+        "daily_steps": {str(d.date()): (None if lat["phone_missing"].iat[i] else float(lat["steps"].iat[i]))
+                        for i, d in enumerate(idx)},
     }
     (out.parent / "truth.json").write_text(json.dumps(truth, indent=2))
     return truth

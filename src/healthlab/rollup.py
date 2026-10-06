@@ -54,15 +54,16 @@ def load_records(con: sqlite3.Connection, cfg: Config) -> pd.DataFrame:
     df = pd.read_sql_query(q, con, params=skip)
     if df.empty:
         return df
+    # Local times are recomputed from UTC with the *current* config (default zone +
+    # override periods), so editing the overrides only requires `healthlab rollup`.
+    resolver = cfg.zone_resolver()
     start = pd.to_datetime(df["start_ts"], utc=True)
     end = pd.to_datetime(df["end_ts"], utc=True)
-    if cfg.local_date_mode == "offset":
-        off = pd.to_timedelta(df["utc_offset"].fillna(0), unit="min")
-        df["local_start"] = start.dt.tz_localize(None) + off
-        df["local_end"] = end.dt.tz_localize(None) + off
-    else:
-        df["local_start"] = start.dt.tz_convert(cfg.timezone).dt.tz_localize(None)
-        df["local_end"] = end.dt.tz_convert(cfg.timezone).dt.tz_localize(None)
+    off = df["utc_offset"].fillna(0)
+    df["local_start"] = resolver.localize(start, off)
+    df["local_end"] = resolver.localize(end, off)
+    df["local_date"] = df["local_start"].dt.strftime("%Y-%m-%d")
+    df["local_end_date"] = df["local_end"].dt.strftime("%Y-%m-%d")
     df["source_name"] = df["source_name"].fillna("(unknown)")
     return df
 
@@ -98,12 +99,15 @@ def prorate_across_midnight(df: pd.DataFrame) -> pd.DataFrame:
     """Split rows whose local interval crosses midnight, prorating ``value`` by time.
 
     Returns rows with a ``day`` column (local date). Rows within one day are
-    unchanged. Zero-length intervals keep their full value on the start day.
+    unchanged. Zero-length intervals keep their full value on the start day, as do
+    the rare samples whose local end precedes their local start (a sample that
+    straddles the boundary of a time-zone override period).
     """
     d0 = df["local_start"].dt.normalize()
     d1 = df["local_end"].dt.normalize()
-    single = df[d0 == d1].assign(day=d0[d0 == d1])
-    multi = df[d0 != d1]
+    one = d1 <= d0
+    single = df[one].assign(day=d0[one])
+    multi = df[~one]
     if multi.empty:
         return single
     pieces = []
@@ -294,9 +298,8 @@ def export_cutoff(con: sqlite3.Connection, cfg: Config) -> pd.Timestamp | None:
     row = con.execute("SELECT MAX(export_date) FROM import_runs WHERE status='ok'").fetchone()
     if not row or not row[0]:
         return None
-    ts = pd.Timestamp(row[0], tz="UTC")
-    local = ts.tz_convert(cfg.timezone) if cfg.local_date_mode == "zone" else ts
-    return local.tz_localize(None).normalize()
+    ts = pd.Timestamp(row[0], tz="UTC").to_pydatetime()
+    return pd.Timestamp(cfg.zone_resolver().local_date(ts))
 
 
 def rebuild_daily(cfg: Config, db_path: str | Path | None = None,

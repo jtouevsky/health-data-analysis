@@ -15,10 +15,13 @@ import os
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from .timeutil import ZoneOverride, ZoneResolver
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "healthlab.yaml"
@@ -81,10 +84,33 @@ class Config:
         return self.raw["time"].get("local_date_mode", "zone")
 
     @property
+    def timezone_overrides(self) -> list[ZoneOverride]:
+        """Configured time-zone override periods (the demo set in demo mode)."""
+        src = (self.raw.get("demo") or {}).get("timezone_overrides") if self.demo_mode \
+            else self.raw["time"].get("overrides")
+        return [ZoneOverride(start=date.fromisoformat(str(o["start"])), end=date.fromisoformat(str(o["end"])),
+                             timezone=o["timezone"], label=o.get("label")) for o in (src or [])]
+
+    def zone_resolver(self) -> ZoneResolver:
+        """Resolver mapping instants to the zone that defines their local date."""
+        return ZoneResolver(self.timezone, self.timezone_overrides, self.local_date_mode)
+
+    @property
     def periods(self) -> dict[str, list[tuple[str, str]]]:
-        """Seasonal periods; the demo set is used in demo mode."""
+        """Seasonal periods: configured ranges plus labelled time-zone overrides.
+
+        Each labelled override contributes its date range to the period of the same
+        label (e.g. every Europe/Sofia override labelled ``bulgaria_summer``), so the
+        travel dates only have to be entered once. The demo sets are used in demo mode.
+        """
         src = self.raw["demo"]["periods"] if self.demo_mode else self.raw["seasonal"]["periods"]
-        return {k: [tuple(r) for r in (v or [])] for k, v in (src or {}).items()}
+        out = {k: [tuple(map(str, r)) for r in (v or [])] for k, v in (src or {}).items()}
+        for o in self.timezone_overrides:
+            if o.label:
+                rng = (o.start.isoformat(), o.end.isoformat())
+                if rng not in out.setdefault(o.label, []):
+                    out[o.label].append(rng)
+        return {k: sorted(v) for k, v in out.items()}
 
     # -- metric rules --------------------------------------------------------
     def rule_for(self, hk_type: str, unit: str | None, is_category: bool) -> MetricRule:

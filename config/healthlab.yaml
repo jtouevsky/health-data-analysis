@@ -14,10 +14,17 @@ time:
   # Apple re-renders every timestamp in the phone's *current* offset at export
   # time, so the per-record offset is not the offset in force when the sample was
   # taken. Local dates are therefore computed by converting the UTC instant into
-  # this IANA zone (DST-aware). Set local_date_mode: offset to use the
-  # per-record offset instead (correct only for exports that preserve it).
+  # an IANA zone (DST-aware): `timezone` by default, or the zone of an override
+  # period below. Set local_date_mode: offset to use the per-record offset instead
+  # (correct only for exports that preserve it).
   timezone: America/Los_Angeles
   local_date_mode: zone            # zone | offset
+  # Override periods: inclusive local dates in the override zone -> IANA zone.
+  # A labelled override also becomes a seasonal-comparison period of that label,
+  # so travel dates are entered once. Changing these only needs `healthlab rollup`.
+  overrides: []
+  #  - {start: "2024-06-20", end: "2024-08-25", timezone: Europe/Sofia, label: bulgaria_summer}
+  #  - {start: "2025-06-18", end: "2025-08-28", timezone: Europe/Sofia, label: bulgaria_summer}
 
 ingest:
   batch_size: 10000
@@ -133,9 +140,10 @@ seasonal:
   bootstrap_reps: 2000
   block_days: 7
   seed: 42
-  # label -> list of [start, end] inclusive date ranges. Fill in your own.
+  # label -> list of [start, end] inclusive date ranges. Labelled time-zone
+  # overrides (time.overrides) are merged in automatically, so bulgaria_summer
+  # normally needs no entry here.
   periods:
-    bulgaria_summer: []        # e.g. [["2024-06-20", "2024-08-25"], ["2025-06-18", "2025-08-28"]]
     school_year: []            # e.g. [["2023-09-01", "2024-06-10"], ["2024-09-03", "2025-06-12"]]
 
 energy:
@@ -162,6 +170,8 @@ demo:
   start_date: "2025-04-01"
   days: 548
   seed: 2024
+  timezone_overrides:
+    - {start: "2025-06-20", end: "2025-08-25", timezone: Europe/Sofia, label: bulgaria_summer}
+    - {start: "2026-06-20", end: "2026-08-25", timezone: Europe/Sofia, label: bulgaria_summer}
   periods:
-    bulgaria_summer: [["2025-06-20", "2025-08-25"], ["2026-06-20", "2026-08-25"]]
     school_year: [["2025-04-01", "2025-06-12"], ["2025-09-03", "2026-06-12"]]

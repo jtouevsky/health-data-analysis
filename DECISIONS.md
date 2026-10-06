@@ -34,7 +34,11 @@ choices worth revisiting once more data exists.
 
 | # | Decision | Rationale |
 |---|---|---|
-| T1 | **Local dates use `America/Los_Angeles` (DST-aware) applied to the UTC instant**, for all records, including summers in Bulgaria. | Owner's decision: the export doesn't preserve original offsets (D3). ⚠️ Known error: during Bulgaria stays, the LA date boundary falls at about 10:00 Sofia time, so mornings are attributed to the previous day. Daily *totals* over a stay are unaffected, but day-to-day alignment (and lagged correlations) are noisier in those weeks. |
+| T1 | **Local dates use `America/Los_Angeles` (DST-aware) applied to the UTC instant by default**, plus **config-defined override periods** (`time.overrides`: inclusive date range → IANA zone, e.g. Europe/Sofia for summers in Bulgaria). | The export doesn't preserve original offsets (D3), so the zone has to come from knowledge of where you were. LA is the owner's default, and overrides fix the ~10 h misalignment that otherwise moves Sofia mornings onto the previous LA date. The synthetic test shows summer daily totals are exact with the override, and systematically wrong (median 8%, 20%+ on many days) without it. |
+| T1a | An override covers **[start 00:00, end+1 00:00) local time in the override zone**, matched on the UTC instant. Overlapping overrides are a config error. | Unambiguous and independent of the offset an export was rendered with. ⚠️ Travel days are inherently ambiguous: the LA afternoon before departure falls inside the override window (it's already the next day in Sofia), and after return the LA afternoon of the end date shares that date with the last Sofia day. These 2 days per trip should be read with caution. |
+| T1b | Local dates are **recomputed from UTC at every rollup** using the current config. `records.local_date` is only an ingest-time snapshot. | Editing overrides only needs `healthlab rollup`, not a re-import. |
+| T1c | A **labelled override becomes a seasonal period** of that label (merged with any `seasonal.periods` ranges of the same label). | The travel dates are entered once and drive both the time zone and the "Bulgaria summer vs school year" comparison. |
+| T1d | Samples whose local end precedes their local start (they straddle an override boundary) are assigned wholly to their start day. | It's rare (a few samples per trip), and prorating a negative interval is undefined. |
 | T2 | `local_date_mode: offset` remains available. | Correct for exports that preserve offsets, and lets tests cover both behaviours. |
 | T3 | A record's day is the local date of its **start** time. `local_end_date` is also stored. | That's the convention Apple's own daily charts use. Sleep uses the end date instead (R5). |
 
@@ -71,7 +75,7 @@ choices worth revisiting once more data exists.
 | Q2 | Robust outlier flags are skipped for count / `zero_fill` metrics, which only get plausibility checks. | Zero-inflated series have a degenerate MAD. |
 | Q3 | Plausibility ranges per metric in config (e.g. steps 0–60,000, basal 800–3,000 kcal). | They catch unit errors and duplicated imports, and are deliberately wide. |
 | Q4 | Gaps are reported only between a metric's first and last observation, for runs ≥ 3 days. | Before the first sample the metric didn't exist. Gaps of 1–2 days are routine. |
-| Q5 | Activity timing (share of steps per local hour by month) is shown on the Data Quality page. | It makes the LA-only timezone limitation (T1) visible: travel shows up as a shifted daily rhythm. |
+| Q5 | Activity timing (share of steps per local hour by month, in resolver-local time) is shown on the Data Quality page. | Travel *not* covered by an override shows up as a shifted daily rhythm, and correctly configured overrides make the band disappear. It's a visual check of T1. |
 
 ## Trends & presentation
 
@@ -145,7 +149,7 @@ choices worth revisiting once more data exists.
 | # | Decision | Rationale |
 |---|---|---|
 | Y1 | The synthetic export mimics a real iPhone export: the same XML layout, imperial units (`mi`, `Cal`, `mi/hr`, `in`, `lb`, `%` as a fraction), and every timestamp rendered in a fixed `-0700`. A few summer records are rendered at `+0300`. | It exercises the real parsing, unit-conversion and dedup paths, including the export-offset quirk (D3). |
-| Y2 | Days are generated as LA-local days. The "Bulgaria summer" shifts the activity rhythm to Sofia hours *within* the LA day. | It makes the travel signature visible on the activity-timing heatmap while keeping planted daily effects exactly recoverable. |
+| Y2 | Summer days (`demo.timezone_overrides`) are generated as **Europe/Sofia-local days**, and all other days as LA days. Samples of LA days that fall inside an override window are dropped (travel day). `truth.json` holds per-day true steps and the travel days. | The override must be needed and sufficient to recover daily totals. The e2e test checks both. |
 | Y3 | Planted effects: steps → walking speed at lag 1; active energy → intake at lag 2; +35% summer steps; a 250 kcal/d cut for 240 days then maintenance (+200 kcal/d in summers); 15% intake under-reporting; Apple active energy +15% and basal +50 kcal/d; streaky Markov logging (~70% complete days, ~12% of logged days partial); weigh-ins 5 of 7 days with 0.45 kg noise; sleep in the last 14 days only. All values are in `synth.TRUTH_PARAMS` and written to `truth.json`. | Each analysis has something specific to recover, at realistic signal-to-noise. |
 | Y4 | The end-to-end test asserts recovery with tolerances: correct best lag with \|ρ\| > 0.25 and q < 10⁻³; TDEE within ±150 kcal after the under-reporting adjustment; Apple mean within 3%; summer δ > 0.3 with block CI excluding 0. | It's a regression test for the methodology, not just for the code. |
 | Y5 | Synthetic event times are made unique per second. | Identical (type, value, start, end) samples are deduplicated by design (I5). Real sensors don't emit them, and the generator shouldn't either. |
@@ -153,7 +157,7 @@ choices worth revisiting once more data exists.
 ## Items to review when using your own data
 
 1. **E3**: the default weight-change estimator deviates from the brief (window OLS instead of EWMA-trend difference). The EWMA version is one config value away.
-2. **T1**: LA-only local dates misalign Bulgaria days. If exact summer dates are added to config, a per-period timezone override would be a small change.
+2. **T1**: add your trips (e.g. summers abroad) as `time.overrides` (they also become the `bulgaria_summer` seasonal period). Check the activity-timing heatmap afterwards: correctly covered summers lose their shifted band.
 3. **N2**: the well-logged thresholds (3 entries, 1,200–5,000 kcal) are generic adult defaults. Tune them to your logging habits once nutrition data exists.
 4. **C9**: whether basal energy belongs in the correlation scan at all, given it's partly a phone-carry artifact on iPhone-only data.
 5. **S2**: `seasonal.periods` ships empty. Add the real Bulgaria / school-year date ranges.

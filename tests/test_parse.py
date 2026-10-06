@@ -3,6 +3,8 @@
 import json
 import sqlite3
 
+import pandas as pd
+
 from healthlab.db import connect
 from healthlab.ingest import ingest_export
 from xmlfactory import rec, workout, write_export
@@ -110,3 +112,17 @@ def test_batches_smaller_than_input(tmp_path, cfg):
     body = "".join(rec(STEPS, i, f"2024-05-01 10:{i:02d}:00 -0700") for i in range(7))
     s = ingest_export(write_export(tmp_path / "b.zip", body), cfg, db_path=tmp_path / "h.db")
     assert s.records_inserted == 7
+
+
+def test_ingest_and_rollup_apply_timezone_overrides(tmp_path, cfg):
+    from healthlab.rollup import rebuild_daily
+
+    # 08:00 Sofia on July 2 is 22:00 LA on July 1.
+    body = rec(STEPS, 500, "2024-07-02 08:00:00 +0300", "2024-07-02 08:10:00 +0300")
+    db = tmp_path / "h.db"
+    ingest_export(write_export(tmp_path / "e.zip", body), cfg, db_path=db)
+    assert sqlite3.connect(db).execute("SELECT local_date FROM records").fetchone()[0] == "2024-07-01"
+    # Add the override and only re-run the rollup: the day moves.
+    cfg.raw["time"]["overrides"] = [{"start": "2024-06-20", "end": "2024-08-25", "timezone": "Europe/Sofia"}]
+    d = rebuild_daily(cfg, db_path=db)
+    assert d.index.tolist() == [pd.Timestamp("2024-07-02")]

@@ -28,7 +28,7 @@ from xml.etree.ElementTree import Element, iterparse
 
 from .config import Config
 from .db import connect
-from .timeutil import local_date, offset_minutes, parse_apple_ts, to_utc_str
+from .timeutil import ZoneResolver, offset_minutes, parse_apple_ts, to_utc_str
 
 log = logging.getLogger(__name__)
 
@@ -129,9 +129,9 @@ def _float_or_none(s: str | None) -> float | None:
         return None
 
 
-def record_to_row(el: Element, cfg: Config, run_id: int) -> tuple:
+def record_to_row(el: Element, cfg: Config, run_id: int, resolver: ZoneResolver | None = None) -> tuple:
     """Convert a ``<Record>`` element to a ``records`` row tuple (see RECORD_COLS)."""
-    mode, tz = cfg.local_date_mode, cfg.timezone
+    resolver = resolver or cfg.zone_resolver()
     start = parse_apple_ts(el.get("startDate") or el.get("creationDate"))
     end = parse_apple_ts(el.get("endDate") or el.get("startDate"))
     created_raw = el.get("creationDate")
@@ -150,13 +150,14 @@ def record_to_row(el: Element, cfg: Config, run_id: int) -> tuple:
     return (
         rtype, source, _clean(el.get("sourceVersion")), el.get("device"), unit, value, value_text,
         start_utc, end_utc, to_utc_str(created) if created else None, offset_minutes(start),
-        local_date(start, mode, tz).isoformat(), local_date(end, mode, tz).isoformat(),
+        resolver.local_date(start).isoformat(), resolver.local_date(end).isoformat(),
         json.dumps(meta, ensure_ascii=False) if meta else None, h, run_id,
     )
 
 
-def workout_to_row(el: Element, cfg: Config, run_id: int) -> tuple:
+def workout_to_row(el: Element, cfg: Config, run_id: int, resolver: ZoneResolver | None = None) -> tuple:
     """Convert a ``<Workout>`` element to a ``workouts`` row tuple (see WORKOUT_COLS)."""
+    resolver = resolver or cfg.zone_resolver()
     start = parse_apple_ts(el.get("startDate"))
     end = parse_apple_ts(el.get("endDate"))
     created_raw = el.get("creationDate")
@@ -182,7 +183,7 @@ def workout_to_row(el: Element, cfg: Config, run_id: int) -> tuple:
         _float_or_none(el.get("duration")), el.get("durationUnit"),
         dist, dist_u, energy, energy_u,
         start_utc, end_utc, to_utc_str(parse_apple_ts(created_raw)) if created_raw else None,
-        offset_minutes(start), local_date(start, cfg.local_date_mode, cfg.timezone).isoformat(),
+        offset_minutes(start), resolver.local_date(start).isoformat(),
         json.dumps(stats) if stats else None,
         json.dumps(meta, ensure_ascii=False) if meta else None, h, run_id,
     )
@@ -217,6 +218,7 @@ def ingest_export(path: str | Path, cfg: Config, db_path: str | Path | None = No
     own = con is None
     con = con or connect(db_path or cfg.db_path)
     batch_size = int(cfg.section("ingest").get("batch_size", 10000))
+    resolver = cfg.zone_resolver()
     stats = IngestStats()
 
     started = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -244,7 +246,7 @@ def ingest_export(path: str | Path, cfg: Config, db_path: str | Path | None = No
                 if tag == "Record":
                     stats.records_seen += 1
                     try:
-                        rec_batch.append(record_to_row(el, cfg, stats.run_id))
+                        rec_batch.append(record_to_row(el, cfg, stats.run_id, resolver))
                     except (ValueError, TypeError) as exc:
                         stats.parse_errors += 1
                         log.debug("skipping unparsable record: %s", exc)
@@ -255,7 +257,7 @@ def ingest_export(path: str | Path, cfg: Config, db_path: str | Path | None = No
                 elif tag == "Workout":
                     stats.workouts_seen += 1
                     try:
-                        wk_batch.append(workout_to_row(el, cfg, stats.run_id))
+                        wk_batch.append(workout_to_row(el, cfg, stats.run_id, resolver))
                     except (ValueError, TypeError) as exc:
                         stats.parse_errors += 1
                         log.debug("skipping unparsable workout: %s", exc)

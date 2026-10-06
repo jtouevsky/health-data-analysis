@@ -25,6 +25,7 @@ pip install -e . && healthlab demo      # synthetic data end to end, opens the a
 | Active energy today → food intake **in 2 days** | lag 2, positive | Strongest at **lag 2**, ρ = 0.42, q < 10⁻¹⁰ |
 | True TDEE | 2,140 kcal/d | **2,167** kcal/d after the 15% under-reporting adjustment. Naive estimate 1,848 (the bias is visible) |
 | Apple's active + basal estimate | 2,248 kcal/d | 2,244 kcal/d. Gap to empirical TDEE −396 kcal/d (95% CI −470 to −322), stable over time (drift p = 0.69) |
+| Summers lived in Sofia time | daily totals | Exact with the `Europe/Sofia` override (median error < 1%). Without it, summer days are wrong by 8% (median) and > 20% on many days |
 | Summers in Bulgaria: +35% steps | +35% | Median +2,312 steps/day, 7-day block-bootstrap 95% CI [1,448, 3,064], Cliff's δ = 0.47 |
 | Logging coverage | ~70% of days complete | 67% flagged well-logged, 14% partial. Unlogged days are missing, never zero |
 | Duplicate energy from a second app | must not double count | Source priority keeps one source per day (mean active energy within 4% of truth) |
@@ -67,9 +68,11 @@ your machine, and `.gitignore` keeps it out of version control. Real results are
 
 **Time zones** (DECISIONS T1–T3)
 - Apple re-renders every timestamp in the phone's offset *at export time*. A US-Pacific export says `-0700` everywhere,
-  including summers in Bulgaria, so local dates are computed in `America/Los_Angeles` (DST-aware).
-- The resulting summer misalignment is a documented, visible limitation: the Data Quality page shows
-  activity timing by hour, and travel appears as a shifted band.
+  including summers in Bulgaria, so the original offsets are lost.
+- Local dates are computed from the UTC instant in `America/Los_Angeles` (DST-aware) by default, and in the
+  configured zone inside **override periods** (e.g. `Europe/Sofia` for each summer). Labelled overrides double
+  as seasonal-comparison periods.
+- The Data Quality page's activity-by-hour heatmap shows any travel not covered by an override as a shifted band.
 
 **Daily rollup** ([`rollup.py`](src/healthlab/rollup.py))
 - One config mapping sets each type's aggregation: sum, mean, last, LAeq for audio, count, or sleep (assigned
@@ -153,10 +156,12 @@ pytest
 85 tests cover parsing, timezone edge cases, duplicate imports, aggregation rules, logging coverage,
 BH correction, the stats primitives, the forecasting leakage guard, and the synthetic end-to-end run (~10 s).
 
-### Configure your periods
+### Configure your travel periods
 
-Fill in your actual Bulgaria dates in `config/healthlab.yaml` → `seasonal.periods`. Until then, the Seasonal
-page compares calendar months.
+Add each stay abroad to `config/healthlab.yaml` → `time.overrides`, for example
+`{start: "2025-06-18", end: "2025-08-28", timezone: Europe/Sofia, label: bulgaria_summer}`, then run
+`healthlab rollup`. The label also makes it a period on the Seasonal page; add `school_year` ranges under
+`seasonal.periods`. Until two periods exist, the Seasonal page compares calendar months.
 
 ### Privacy
 

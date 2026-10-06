@@ -18,7 +18,8 @@ configured = {k: v for k, v in c.periods.items() if v}
 modes = (["Configured periods"] if len(configured) >= 2 else []) + ["Calendar months"]
 mode = st.radio("Define periods by", modes, horizontal=True)
 if len(configured) < 2:
-    st.caption("Tip: define named periods (e.g. each summer's Bulgaria dates) under `seasonal.periods` in "
+    st.caption("Tip: add each Bulgaria stay as a labelled `time.overrides` entry (it sets the time zone *and* "
+               "becomes the `bulgaria_summer` period) and `school_year` ranges under `seasonal.periods` in "
                "`config/healthlab.yaml`. Until then, compare calendar months.")
 
 if mode == "Configured periods":

@@ -132,3 +132,30 @@ def test_forecast_runs_on_demo(demo):
     ev = evaluate(demo["daily"]["steps"], ForecastParams(n_splits=3))
     assert set(ev.summary["model"]) == {"naive", "seasonal_naive", "sarimax", "gbm"}
     assert np.isfinite(ev.summary["mae"]).all()
+
+
+def test_timezone_overrides_put_summer_samples_on_the_right_day(demo):
+    """Summer days are lived in Sofia time; only the override recovers their daily totals."""
+    from healthlab.rollup import build_daily, load_records
+
+    cfg, t = demo["cfg"], demo["truth"]
+    truth = pd.Series(t["daily_steps"], dtype=float)
+    truth.index = pd.to_datetime(truth.index)
+    summer = pd.Series(False, index=truth.index)
+    for s, e in t["summer_periods"]:
+        summer.loc[s:e] = True
+    check = summer & ~truth.index.isin(pd.to_datetime(t["travel_days"])) & truth.notna()
+
+    got = demo["raw"]["steps"].reindex(truth.index)
+    rel_err = ((got - truth).abs() / truth)[check]
+    assert rel_err.median() < 0.01                      # exact up to per-sample rounding
+
+    # Same raw records, overrides removed: summer days are split across LA dates.
+    cfg_no = load_config(demo_mode=True)
+    cfg_no.raw["demo"]["timezone_overrides"] = []
+    daily_no, _, _ = build_daily(load_records(demo["con"], cfg_no), cfg_no)
+    rel_err_no = ((daily_no["steps"].reindex(truth.index) - truth).abs() / truth)[check]
+    # Only the (low-activity) Sofia-morning hours move to the neighbouring LA date and
+    # neighbouring days have similar totals, so the error is moderate but systematic.
+    assert rel_err_no.median() > 0.04 and rel_err_no.median() > 5 * rel_err.median()
+    assert (rel_err_no > 0.2).mean() > 0.15
