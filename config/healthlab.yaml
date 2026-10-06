@@ -143,7 +143,8 @@ energy:
   window_days: 28
   min_logged_days: 14         # well-logged days required inside a window
   min_weigh_ins: 4            # weigh-ins required inside a window
-  bootstrap_reps: 300
+  estimator: ols              # ols | ewma  (weight change per window; DECISIONS.md E3)
+  trajectory_sims: 400
   logging_error_sd: 0.10      # per-day relative error of logged intake (trajectory sim)
   apple_bias_sd: 0.08         # run-level relative uncertainty of Apple's expenditure
   seed: 7
