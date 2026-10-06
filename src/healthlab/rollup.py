@@ -247,7 +247,7 @@ def build_daily(records: pd.DataFrame, cfg: Config) -> tuple[pd.DataFrame, pd.Da
     if not frames:
         return pd.DataFrame(), pd.DataFrame(catalog), pd.DataFrame()
 
-    daily = pd.concat(frames, axis=1).sort_index()
+    daily = pd.concat(frames, axis=1, sort=True)
     daily.index = pd.DatetimeIndex(daily.index, name="date")
     # Continuous calendar so gaps are explicit NaN rows.
     daily = daily.reindex(pd.date_range(daily.index.min(), daily.index.max(), freq="D", name="date"))

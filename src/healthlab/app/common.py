@@ -122,6 +122,9 @@ def optional_module_notice(what: str, needs: str) -> None:
         "To see it working, run the synthetic demo: `healthlab demo`.", icon="ℹ️")
 
 
+BOTTOM_LEGEND = dict(orientation="h", yanchor="top", y=-0.12, x=0)
+
+
 def style(fig: go.Figure, height: int = 380, **kw) -> go.Figure:
     """Consistent, recessive chart chrome."""
     layout = dict(height=height, margin=dict(l=10, r=10, t=40, b=10), hovermode="x unified",

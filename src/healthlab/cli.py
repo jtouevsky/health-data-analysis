@@ -82,6 +82,10 @@ def _launch_app(demo: bool) -> int:
 
     app = Path(__file__).parent / "app" / "main.py"
     env = dict(os.environ)
+    # Make the package importable in the Streamlit process even if the editable
+    # install's .pth file is skipped (see README troubleshooting).
+    src = str(Path(__file__).resolve().parents[1])
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
     if demo:
         env["DEMO_MODE"] = "1"
     # Local only: bind to loopback and disable usage statistics.

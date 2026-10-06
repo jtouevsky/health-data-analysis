@@ -139,3 +139,21 @@ choices worth revisiting once more data exists.
 | F5 | **HistGradientBoosting, direct multi-horizon**: one model with horizon as a feature. Features are the value at the origin, 7/28-day means to the origin, the target weekday, and lags 7, 8, 14, 21, 28 *relative to the target* (masked when they'd fall after the origin). Shallow trees, 200 iterations, lr 0.05, min leaf 20, L2 = 1. | Direct strategy avoids recursive error accumulation. The masking rule guarantees no look-ahead (unit-tested). Heavy regularisation suits small, noisy data, and HistGB handles missing days natively. |
 | F6 | The verdict text is generated from the numbers. "Beats" requires > 2% lower MAE than the best baseline. Otherwise it reads "does not meaningfully beat" or "is worse than". | Requirement: report honestly even when models lose. |
 | F7 | The **export day is dropped** from the daily table, since it was exported mid-day. | A partial final day (a fraction of a normal day's steps) looks like a crash in activity and wrecks the naive baseline. |
+
+## Synthetic data & demo mode
+
+| # | Decision | Rationale |
+|---|---|---|
+| Y1 | The synthetic export mimics a real iPhone export: the same XML layout, imperial units (`mi`, `Cal`, `mi/hr`, `in`, `lb`, `%` as a fraction), and every timestamp rendered in a fixed `-0700`. A few summer records are rendered at `+0300`. | It exercises the real parsing, unit-conversion and dedup paths, including the export-offset quirk (D3). |
+| Y2 | Days are generated as LA-local days. The "Bulgaria summer" shifts the activity rhythm to Sofia hours *within* the LA day. | It makes the travel signature visible on the activity-timing heatmap while keeping planted daily effects exactly recoverable. |
+| Y3 | Planted effects: steps → walking speed at lag 1; active energy → intake at lag 2; +35% summer steps; a 250 kcal/d cut for 240 days then maintenance (+200 kcal/d in summers); 15% intake under-reporting; Apple active energy +15% and basal +50 kcal/d; streaky Markov logging (~70% complete days, ~12% of logged days partial); weigh-ins 5 of 7 days with 0.45 kg noise; sleep in the last 14 days only. All values are in `synth.TRUTH_PARAMS` and written to `truth.json`. | Each analysis has something specific to recover, at realistic signal-to-noise. |
+| Y4 | The end-to-end test asserts recovery with tolerances: correct best lag with \|ρ\| > 0.25 and q < 10⁻³; TDEE within ±150 kcal after the under-reporting adjustment; Apple mean within 3%; summer δ > 0.3 with block CI excluding 0. | It's a regression test for the methodology, not just for the code. |
+| Y5 | Synthetic event times are made unique per second. | Identical (type, value, start, end) samples are deduplicated by design (I5). Real sensors don't emit them, and the generator shouldn't either. |
+
+## Items to review when using your own data
+
+1. **E3**: the default weight-change estimator deviates from the brief (window OLS instead of EWMA-trend difference). The EWMA version is one config value away.
+2. **T1**: LA-only local dates misalign Bulgaria days. If exact summer dates are added to config, a per-period timezone override would be a small change.
+3. **N2**: the well-logged thresholds (3 entries, 1,200–5,000 kcal) are generic adult defaults. Tune them to your logging habits once nutrition data exists.
+4. **C9**: whether basal energy belongs in the correlation scan at all, given it's partly a phone-carry artifact on iPhone-only data.
+5. **S2**: `seasonal.periods` ships empty. Add the real Bulgaria / school-year date ranges.

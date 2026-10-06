@@ -5,7 +5,7 @@ import streamlit as st
 
 from healthlab.analysis.forecast import LABELS, ForecastParams, evaluate, future_forecast
 from healthlab.analysis.trend import weight_trend
-from healthlab.app.common import SERIES, MUTED, analysable_metrics, cfg, has_metric, label, require_data, style, to_display
+from healthlab.app.common import BOTTOM_LEGEND, SERIES, MUTED, analysable_metrics, cfg, has_metric, label, require_data, style, to_display
 
 st.title("Forecasts")
 daily, catalog = require_data()
@@ -120,7 +120,7 @@ for m in models:
                     line=dict(color=COLORS[m], width=3, dash="dot"), marker=dict(size=8), legendgroup=m)
 fig.update_yaxes(title=f"{name} ({unit})" if unit and unit != "count" else name)
 st.plotly_chart(style(fig, title=f"{name}: last 90 days, backtest forecasts, and next {p.horizon} days", height=500,
-                      legend=dict(orientation="h", yanchor="top", y=-0.12, x=0)),
+                      legend=BOTTOM_LEGEND),
                 width="stretch")
 
 with st.expander("Model details"):

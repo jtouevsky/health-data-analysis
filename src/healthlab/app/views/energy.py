@@ -5,7 +5,7 @@ import streamlit as st
 
 from healthlab.analysis.energy import (ESTIMATORS, EnergyParams, expected_trajectory, has_energy_data,
                                        implied_daily_discrepancy, summarize, window_tdee)
-from healthlab.app.common import (SERIES, MUTED, cfg, optional_module_notice, require_data, style,
+from healthlab.app.common import (BOTTOM_LEGEND, SERIES, MUTED, cfg, optional_module_notice, require_data, style,
                                   to_display)
 
 st.title("Energy Balance")
@@ -71,7 +71,8 @@ nw = s["windows"]
 fig.add_scatter(x=nw.index, y=nw["tdee"], mode="markers", name="Non-overlapping windows",
                 marker=dict(size=9, color=SERIES[0], line=dict(width=2, color="white")))
 fig.update_yaxes(title="kcal / day")
-st.plotly_chart(style(fig, title=f"TDEE over rolling {window}-day windows (window end date)"), width="stretch")
+st.plotly_chart(style(fig, title=f"TDEE over rolling {window}-day windows (window end date)", height=440,
+                      legend=BOTTOM_LEGEND), width="stretch")
 st.caption("Adjacent rolling windows share most of their days, so the line is smooth by construction. "
            "Summary statistics use only the non-overlapping windows (dots).")
 
@@ -111,7 +112,8 @@ if not traj.empty:
                     marker=dict(size=4, color=MUTED))
     fig.add_scatter(x=traj.index, y=conv(traj["trend"]), name="Actual trend (EWMA)", line=dict(color=SERIES[0], width=2))
     fig.update_yaxes(title=unit)
-    st.plotly_chart(style(fig, title="If the food log and Apple's expenditure were both right…", height=420),
+    st.plotly_chart(style(fig, title="If the food log and Apple's expenditure were both right…", height=460,
+                          legend=BOTTOM_LEGEND),
                     width="stretch")
     disc = implied_daily_discrepancy(traj, p.kcal_per_kg)
     st.markdown(
