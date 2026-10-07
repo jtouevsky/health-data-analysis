@@ -195,6 +195,10 @@ files inside `.venv`. Python ≥ 3.14 then silently skips the editable install's
 prefix commands with `PYTHONPATH=src`. `healthlab app` / `healthlab demo` set `PYTHONPATH` for the Streamlit
 process automatically.
 
+### License and security
+
+MIT, see [LICENSE](LICENSE). Privacy and security notes: [SECURITY.md](SECURITY.md). `.env.example` documents the two optional environment variables (no secrets are needed).
+
 ## Project layout
 
 ```
